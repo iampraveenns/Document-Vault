@@ -1,0 +1,881 @@
+# Build a Complete MERN Document Management Application
+
+## 1. Role and Objective
+
+Act as a senior full-stack software engineer, software architect, and UI/UX designer.
+
+Build a complete, functional, maintainable, and placement-ready **Document Management System** using the MERN stack.
+
+This application is intended to demonstrate my practical full-stack development skills during upcoming software engineering placement drives. The code should follow clean architecture, meaningful naming conventions, reliable error handling, and professional development practices.
+
+**Important scope restriction:** Implement only the Document Management module. Do not implement AI chat, document question answering, RAG, embeddings, or an LLM integration. The core objective is to manage uploaded documents reliably.
+
+Do not stop after generating a plan, architecture diagram, or sample code. Implement the complete application in the available project workspace, create all required files, connect the frontend to the actual backend, and verify the implementation.
+
+If an existing project is present, inspect its files first, preserve useful existing functionality, and integrate the solution into its current structure rather than unnecessarily replacing the project.
+
+---
+
+## 2. Functional Requirements
+
+Users must be able to:
+
+1. Upload documents in `.txt`, `.md`, and `.json` formats.
+2. View all uploaded documents in a document management dashboard.
+3. See the newest uploaded documents first.
+4. Download previously uploaded documents with their original filenames.
+5. Delete documents with a confirmation step.
+6. Receive clear validation and error messages.
+7. See loading, success, failure, and empty states.
+8. Refresh the browser without losing previously stored documents.
+9. Use the application on desktop and mobile screens.
+
+Every frontend operation must communicate with the real backend API. Do not use hardcoded sample documents or local-only arrays as a substitute for persistent backend functionality.
+
+---
+
+## 3. Technology Stack
+
+Use the following technologies.
+
+### Frontend
+
+- React
+- Vite
+- JavaScript with ES modules
+- Tailwind CSS
+- Fetch API or Axios for HTTP communication
+- Lucide React for interface icons
+
+Use reusable React components and React hooks for state management. Do not introduce Redux or another global state library unless there is a demonstrated need.
+
+### Backend
+
+- Node.js
+- Express.js
+- Multer for handling multipart file uploads
+- Mongoose for MongoDB models and persistence
+- MongoDB as the metadata database
+- Node.js filesystem APIs for document storage
+
+### Testing and Documentation
+
+- Vitest and React Testing Library for frontend tests
+- Supertest and a suitable test database for backend API tests
+- OpenAPI for the machine-readable API specification
+- Swagger UI for interactive API documentation
+
+Use compatible, stable package versions and appropriate npm scripts.
+
+---
+
+## 4. Architecture and Separation of Responsibilities
+
+Build a decoupled application with separate frontend and backend applications.
+
+The architecture must follow this flow:
+
+React frontend
+→ HTTP REST API
+→ Express routes and middleware
+→ Controllers and service layer
+→ File storage and MongoDB
+
+### Frontend responsibilities
+
+- Render the document dashboard.
+- Allow users to select or drag and drop a file.
+- Show the accepted file formats and maximum file size.
+- Display upload progress or processing status.
+- Fetch and render document metadata.
+- Trigger downloads.
+- Confirm and trigger deletion.
+- Show clear notifications and error states.
+
+### Backend responsibilities
+
+- Expose REST API endpoints.
+- Validate request parameters and uploaded files.
+- Use Multer to process file uploads.
+- Extract and validate text contents where applicable.
+- Manage file storage.
+- Persist and retrieve document metadata through Mongoose.
+- Handle deletion and partial failures.
+- Return predictable HTTP status codes and JSON error responses.
+
+### Storage responsibilities
+
+Keep actual file contents separate from MongoDB metadata.
+
+- Store actual documents in a dedicated local filesystem directory.
+- Store document metadata and storage references in MongoDB.
+- Keep temporary uploads separate from permanent files.
+- Never expose internal filesystem paths in public API responses.
+- Never serve the storage directory as a publicly accessible static directory.
+
+Use a storage service or utility module so filesystem operations are not scattered throughout the controllers. The design should make it possible to replace local storage with an object-storage provider in the future without rewriting the React application.
+
+---
+
+## 5. Recommended Project Structure
+
+Create a clear project structure similar to the following:
+
+```text
+document-management-system/
+├── client/
+│   ├── public/
+│   ├── src/
+│   │   ├── api/
+│   │   │   └── documentsApi.js
+│   │   ├── components/
+│   │   │   ├── AppHeader.jsx
+│   │   │   ├── UploadArea.jsx
+│   │   │   ├── DocumentTable.jsx
+│   │   │   ├── DocumentRow.jsx
+│   │   │   ├── ConfirmDeleteDialog.jsx
+│   │   │   ├── EmptyState.jsx
+│   │   │   └── Toast.jsx
+│   │   ├── hooks/
+│   │   ├── pages/
+│   │   │   └── DocumentsPage.jsx
+│   │   ├── utils/
+│   │   ├── App.jsx
+│   │   ├── main.jsx
+│   │   └── index.css
+│   ├── .env.example
+│   └── package.json
+├── server/
+│   ├── src/
+│   │   ├── config/
+│   │   │   └── database.js
+│   │   ├── models/
+│   │   │   └── Document.js
+│   │   ├── routes/
+│   │   │   └── documentRoutes.js
+│   │   ├── controllers/
+│   │   │   └── documentController.js
+│   │   ├── services/
+│   │   │   └── documentService.js
+│   │   ├── middleware/
+│   │   │   ├── uploadMiddleware.js
+│   │   │   ├── validateDocument.js
+│   │   │   ├── notFound.js
+│   │   │   └── errorHandler.js
+│   │   ├── utils/
+│   │   │   ├── storage.js
+│   │   │   └── AppError.js
+│   │   ├── app.js
+│   │   └── server.js
+│   ├── tests/
+│   ├── storage/
+│   │   ├── tmp/
+│   │   └── documents/
+│   ├── openapi.yaml
+│   ├── .env.example
+│   └── package.json
+├── .gitignore
+├── package.json
+└── README.md
+```
+
+Adjust the structure when necessary, but preserve clear separation between routing, business logic, validation, persistence, and UI components.
+
+Do not create unnecessary files solely to match this structure. Every module should have a defined responsibility.
+
+---
+
+## 6. MongoDB and Mongoose Data Model
+
+Create a Mongoose `Document` model with at least the following fields:
+
+- `_id`: generated MongoDB document identifier.
+- `originalName`: original filename used for display and downloading.
+- `storedName`: server-generated unique filename used for storage.
+- `extension`: normalized file extension, restricted to `.txt`, `.md`, and `.json`.
+- `mimeType`: a safe, normalized content-type value based on the validated file format.
+- `size`: file size in bytes.
+- `storagePath`: internal path or storage reference for the stored document.
+- `createdAt`: creation timestamp.
+- `updatedAt`: last-update timestamp.
+- `status`: optional lifecycle state, such as `ready` or `deleting`, to support recoverable deletion.
+
+Use Mongoose timestamps.
+
+Use an index suitable for retrieving documents newest first, such as an index over `createdAt` and `_id`, both in descending order.
+
+Do not expose `storagePath` or any sensitive internal storage details in list or upload responses.
+
+Use a consistent response-mapping function so the public API only returns approved metadata fields.
+
+Do not store file content directly in MongoDB for this implementation. Keep metadata in MongoDB and actual document contents on disk.
+
+---
+
+## 7. File Upload and Validation Pipeline
+
+Implement the upload flow in the following order.
+
+### Step 1: Receive the request
+
+The React frontend sends a multipart request to:
+
+`POST /api/documents`
+
+The multipart field name must be `file`.
+
+Use `FormData` on the frontend. Do not manually set the multipart `Content-Type` header when using the browser's Fetch API or Axios with browser-managed `FormData`; let the browser generate the multipart boundary.
+
+### Step 2: Configure Multer
+
+Use Multer with disk storage and a temporary upload directory.
+
+Requirements:
+
+- Accept one file per request.
+- Apply a configurable file-size limit.
+- Use a server-generated temporary filename.
+- Never use the user-provided original filename as the physical storage path.
+- Use an extension allowlist for `.txt`, `.md`, and `.json`.
+- Normalize extensions before comparison.
+- Reject unsupported formats with a meaningful response.
+- Apply upload middleware only to routes that accept uploads.
+- Ensure the temporary directory exists and is writable.
+
+Use a default maximum size of 5 MB, configurable through an environment variable.
+
+A preliminary extension check may happen in Multer's `fileFilter`, but do not treat it as complete content validation.
+
+### Step 3: Validate the actual file contents
+
+After Multer receives the file:
+
+1. Confirm that a file was provided.
+2. Determine its normalized extension from the original filename.
+3. Confirm that the extension is allowlisted.
+4. Enforce the configured file-size limit.
+5. Read the file contents from the temporary path.
+6. Validate text encoding according to an explicitly documented UTF-8 policy.
+7. For `.json`, parse the actual content with `JSON.parse()` and reject malformed JSON.
+8. For `.txt` and `.md`, ensure the contents satisfy the text-encoding policy.
+9. Reject empty files with a clear client error, and document this policy.
+10. Delete the temporary file whenever validation fails.
+
+Client-side validation should improve the user experience, but all authoritative security and content checks must occur on the backend.
+
+Do not trust `file.mimetype` alone because it is supplied by the client. Do not trust the extension alone as evidence that the contents are valid.
+
+Use predictable application errors for validation failures.
+
+### Step 4: Store the validated file
+
+Once validation succeeds:
+
+1. Generate a unique physical filename using a UUID or equivalent cryptographically strong identifier.
+2. Preserve the validated extension in the physical filename.
+3. Move the file from temporary storage into permanent storage.
+4. Ensure storage paths are constructed safely and cannot be controlled by request parameters.
+5. Keep file storage outside the publicly served frontend directory.
+
+Use filesystem APIs correctly and handle file-operation errors.
+
+### Step 5: Save metadata in MongoDB
+
+Create the Mongoose metadata record after the file has been successfully moved to permanent storage.
+
+If the MongoDB insert fails:
+
+- Attempt to delete the newly stored permanent file.
+- Clean up any remaining temporary file.
+- Log cleanup failures.
+- Return an appropriate server error.
+- Do not return a success response when the metadata insert fails.
+
+Return HTTP `201 Created` when the entire upload operation succeeds.
+
+### Step 6: Return safe metadata
+
+A successful upload response should resemble:
+
+```json
+{
+  "message": "Document uploaded successfully",
+  "document": {
+    "_id": "generated-document-id",
+    "originalName": "leave-policy.txt",
+    "extension": ".txt",
+    "size": 2048,
+    "createdAt": "2026-10-29T08:30:00.000Z"
+  }
+}
+```
+
+The sample values are illustrative. Return the real values produced by the application.
+
+Do not return the physical path, temporary path, or internal storage filename unless there is a specific public requirement for doing so.
+
+Use a `finally`-style cleanup strategy or equivalent logic to clean temporary files across success and failure paths without deleting a successfully stored file.
+
+---
+
+## 8. REST API Endpoints
+
+Implement the following endpoints fully.
+
+### A. Upload a document
+
+`POST /api/documents`
+
+Request:
+- Content type: `multipart/form-data`.
+- File field: `file`.
+- Exactly one file.
+
+Success:
+- `201 Created`.
+- JSON response with the created document's public metadata.
+
+Errors:
+- `400 Bad Request`: missing file, empty file, or invalid content.
+- `413 Content Too Large`: upload exceeds the configured limit.
+- `415 Unsupported Media Type`: unsupported extension or file format.
+- `500 Internal Server Error`: unexpected storage or database failure.
+
+Ensure Multer errors are handled by the centralized error handler.
+
+### B. List documents
+
+`GET /api/documents`
+
+Return all available documents, newest first.
+
+Use a database query such as:
+
+```js
+Document.find({ status: "ready" })
+  .sort({ createdAt: -1, _id: -1 });
+```
+
+Adapt this query to the actual schema. If a lifecycle status is not used, ensure the query still excludes deleted records.
+
+Success:
+- `200 OK`.
+- JSON response containing a `documents` array.
+- An empty list is a successful response, not an error.
+
+Only return public metadata fields.
+
+Do not use hardcoded documents or mock responses.
+
+### C. Download a document
+
+`GET /api/documents/:id/download`
+
+Behavior:
+
+1. Validate the MongoDB document ID.
+2. Retrieve the associated metadata.
+3. Ensure the document is in a downloadable state.
+4. Resolve its storage location using the database record, not a path supplied by the client.
+5. Verify that the stored file exists.
+6. Stream the file to the client using the original filename as the download filename.
+7. Handle stream errors without attempting to send a second response.
+
+Return `400` for a malformed ID and `404` when the document record or stored file is missing.
+
+Prevent path traversal. Do not accept arbitrary file paths from URLs or request bodies.
+
+The React frontend must trigger an actual download rather than displaying a fake success message.
+
+### D. Delete a document
+
+`DELETE /api/documents/:id`
+
+Behavior:
+
+1. Validate the MongoDB document ID.
+2. Find the document metadata.
+3. Return `404` if no matching document exists.
+4. Remove the associated file and metadata.
+5. Return a success response only when the operation reaches its defined successful state.
+
+Handle partial failure carefully.
+
+The design may use a lifecycle status such as `deleting`:
+
+- Mark the record as `deleting`.
+- Remove the associated file.
+- Treat an already-missing file as a recoverable condition during deletion.
+- Delete the metadata after the storage cleanup succeeds or the file is confirmed absent.
+- If deletion fails midway, retain enough information for a retry instead of silently losing track of the operation.
+- Exclude records in the `deleting` state from ordinary document lists and downloads.
+- Make retrying an incomplete deletion safe and idempotent.
+
+Do not pretend that MongoDB and filesystem operations form one atomic transaction.
+
+Return `200 OK` with a JSON message or `204 No Content` after successful deletion. Choose one response convention and document it consistently.
+
+### E. Health endpoint
+
+Implement:
+
+`GET /api/health`
+
+Return a small health response indicating that the API is available. Do not report the database as healthy if the database connection has failed.
+
+---
+
+## 9. Error Handling Requirements
+
+Use a consistent error response format:
+
+```json
+{
+  "error": {
+    "code": "INVALID_FILE",
+    "message": "Only .txt, .md, and .json files are supported."
+  }
+}
+```
+
+The precise message may vary by error, but the response structure should remain consistent.
+
+Handle at least these situations:
+
+- No file provided.
+- Unsupported extension.
+- Empty file.
+- Invalid UTF-8 content.
+- Malformed JSON.
+- File exceeding the configured limit.
+- Malformed MongoDB document ID.
+- Document does not exist.
+- Stored file is missing.
+- Duplicate generated storage name or database uniqueness failure.
+- File read, move, or delete failure.
+- MongoDB connection, query, or persistence failure.
+- Unexpected backend exceptions.
+- Invalid HTTP routes.
+- Network errors reported to the frontend.
+
+Use centralized Express error-handling middleware.
+
+Map known errors to appropriate HTTP statuses and avoid returning every failure as `500`.
+
+Never expose stack traces, database credentials, internal file paths, or implementation details in production error responses. Log useful diagnostic information on the server.
+
+Ensure rejected uploads and unexpected upload failures do not leave temporary files behind.
+
+---
+
+## 10. Frontend UI and UX Requirements
+
+Build a polished, professional, responsive document management interface suitable for a software engineering portfolio.
+
+### Design direction
+
+Create a modern, minimal document dashboard with:
+
+- A clean light theme.
+- Neutral backgrounds with one restrained accent color.
+- Clear typography and readable spacing.
+- Consistent border radii and subtle dividers.
+- Consistent file-type icons.
+- Minimal, purposeful animation.
+- Responsive behavior for both desktop and mobile.
+- Accessible form controls, buttons, dialogs, and status messages.
+
+Avoid an excessively decorative design. The priority is professional presentation, clarity, and a smooth workflow.
+
+### Dashboard layout
+
+Create the following elements:
+
+#### Header
+
+- Application identity: "Document Vault".
+- A short subtitle such as "Manage your documents in one place".
+- An upload button or clearly visible upload action.
+- A small, unobtrusive API or connection status indicator only if implemented accurately.
+
+#### Summary section
+
+Display useful summary information calculated from actual API data, such as:
+
+- Total documents.
+- Supported file formats.
+- Total size of listed documents, if implemented correctly.
+
+Do not hardcode statistics.
+
+#### Upload area
+
+Create a drag-and-drop area and a conventional file selector.
+
+Display:
+
+- Supported formats: `.txt`, `.md`, `.json`.
+- Maximum file size: the actual configured limit.
+- Selected filename and size.
+- An upload button.
+- Upload progress or an appropriate processing state.
+- Clear validation feedback.
+- A success message when the backend confirms the upload.
+
+Prevent duplicate submissions while an upload is in progress.
+
+After a successful upload, refresh the actual document list.
+
+#### Document list
+
+Create a responsive table or list showing:
+
+- Filename.
+- File type.
+- File size.
+- Upload date.
+- Download action.
+- Delete action.
+
+Requirements:
+
+- Always use real data returned by the backend.
+- Sort newest first, preferably in the backend.
+- Show appropriate file icons based on extension.
+- Format file sizes and dates readably.
+- Keep action buttons accessible and clearly labelled.
+- Prevent accidental repeated deletes.
+- Show a confirmation dialog before deletion.
+- Update the UI only after the backend confirms success.
+- Provide a refresh or retry mechanism for failed requests.
+
+#### Empty state
+
+When no documents exist, show a useful empty state with a concise explanation and an upload action.
+
+#### Loading and failure states
+
+Implement:
+
+- Initial document-list loading state.
+- Upload-in-progress state.
+- Download error feedback.
+- Delete-in-progress state.
+- Empty state.
+- API connection failure state.
+- Retry actions where appropriate.
+
+Avoid browser alerts as the primary UI experience. Use accessible inline messages, toasts, or dialogs.
+
+### React architecture
+
+Use reusable components rather than putting the entire interface into one component.
+
+Separate API calls from visual components.
+
+Read the backend base URL from a frontend environment variable, such as:
+
+`VITE_API_BASE_URL`
+
+Provide a `.env.example` file with a suitable local development value.
+
+Do not hardcode API URLs across multiple components.
+
+For file downloads, implement the correct browser workflow. If downloading through Fetch or Axios as a Blob, release any generated object URL after it has been used.
+
+---
+
+## 11. Environment Configuration and Local Development
+
+Create appropriate environment-variable files and examples.
+
+Backend variables should include:
+
+```dotenv
+PORT=5000
+MONGODB_URI=mongodb://127.0.0.1:27017/document_management
+CLIENT_ORIGIN=http://localhost:5173
+UPLOAD_DIR=./storage/documents
+TEMP_UPLOAD_DIR=./storage/tmp
+MAX_FILE_SIZE_MB=5
+NODE_ENV=development
+```
+
+Use safe configuration defaults where appropriate and validate mandatory environment variables during startup.
+
+Never commit actual `.env` files or secrets to source control.
+
+Include `.env.example` templates with placeholder values.
+
+Create a root `.gitignore` that excludes:
+
+- `.env` files.
+- `node_modules`.
+- Build output.
+- Temporary uploads.
+- Uploaded user documents.
+- Test-generated files.
+- Coverage output.
+
+Make sure startup fails with a helpful diagnostic if required configuration or database connectivity is unavailable. Do not silently substitute mock data for a failed database connection.
+
+### npm scripts
+
+Provide convenient scripts for:
+
+- Starting the frontend.
+- Starting the backend.
+- Running the backend in development mode.
+- Building the frontend.
+- Running frontend tests.
+- Running backend tests.
+- Running all tests.
+- Running or inspecting the project's API documentation.
+
+If a root-level development command is provided, ensure it starts the actual frontend and backend processes together without hiding errors.
+
+Document how to start MongoDB locally or use a configured MongoDB instance.
+
+---
+
+## 12. OpenAPI and Interactive API Documentation
+
+Create a machine-readable OpenAPI specification in:
+
+`server/openapi.yaml`
+
+Expose interactive Swagger UI at:
+
+`/api-docs`
+
+Document all implemented endpoints, including the health endpoint.
+
+Include:
+
+- Endpoint paths and HTTP methods.
+- File upload request format.
+- Required and optional request parameters.
+- Path-parameter validation.
+- Successful response schemas.
+- Document metadata schema.
+- Error response schema.
+- Relevant HTTP status codes.
+- Download response content type and disposition.
+- Deletion response behavior.
+- Examples of common validation errors.
+
+Ensure the documented API contract matches the actual implementation. Do not generate documentation for endpoints that do not exist.
+
+---
+
+## 13. Automated Testing Requirements
+
+Write meaningful automated tests for the backend and frontend.
+
+Tests must exercise actual behavior, not just verify that modules can be imported.
+
+Use an isolated test database and isolated temporary file-storage directories. Never run deletion tests against real user files or a production database.
+
+### Backend API tests
+
+Cover the following:
+
+#### Upload
+
+- Successfully upload a valid `.txt` file.
+- Successfully upload a valid `.md` file.
+- Successfully upload a valid `.json` file.
+- Verify persisted metadata.
+- Verify the original filename in the returned response.
+- Verify that the file is stored under a server-generated filename.
+- Reject a request without a file.
+- Reject unsupported extensions.
+- Reject malformed JSON.
+- Reject invalid text encoding.
+- Reject oversized files.
+- Reject empty files according to the chosen policy.
+- Verify cleanup of temporary files after rejected uploads.
+- Verify compensation when metadata persistence fails, where practical.
+
+#### Listing
+
+- Return an empty array when no documents exist.
+- Return all ready documents with newest-first ordering.
+- Return only public metadata fields.
+- Exclude records in a deletion-in-progress state.
+
+#### Download
+
+- Download an existing document.
+- Verify that the downloaded content matches the original.
+- Verify that the original filename is supplied to the download response.
+- Reject malformed IDs.
+- Return `404` for nonexistent records.
+- Handle records whose physical files are missing.
+
+#### Delete
+
+- Delete a document and remove both metadata and file.
+- Return the documented missing-resource response for a nonexistent document.
+- Reject malformed document IDs.
+- Handle repeated delete attempts safely.
+- Simulate storage failures where practical.
+- Verify that incomplete deletion does not silently lose the information needed for retry.
+
+#### Error handling
+
+- Validate consistent error response structures.
+- Test malformed IDs, validation failures, storage errors, and database errors where feasible.
+
+### Frontend tests
+
+Test at least:
+
+- The dashboard loads document metadata from the API.
+- The empty state appears when no documents exist.
+- Unsupported files receive visible validation feedback.
+- A valid upload submits a multipart request.
+- A successful upload refreshes the document list.
+- A failed upload displays an error.
+- Download triggers the actual download workflow.
+- Deletion requires confirmation.
+- Successful deletion refreshes the list.
+- Failed deletion preserves the document in the UI and shows an error.
+- Loading and disabled-button states behave correctly.
+
+Ensure test files and test database state are cleaned up after execution.
+
+Do not mark tests as passed unless they have actually been executed successfully.
+
+---
+
+## 14. Security and Reliability Requirements
+
+Apply the following principles:
+
+1. Never trust user-provided filenames as physical paths.
+2. Never trust client-supplied MIME types as proof of content format.
+3. Apply allowlisted extensions, size limits, and actual text-content validation.
+4. Store user files outside the public frontend directory.
+5. Keep storage references internal to the backend.
+6. Validate document IDs before database operations.
+7. Avoid path traversal in all file operations.
+8. Handle missing files and partial filesystem/database failures.
+9. Clean up temporary uploads.
+10. Keep client-facing error responses safe and understandable.
+11. Configure CORS to allow the intended frontend origin in development.
+12. Use environment variables for credentials and deployment-specific configuration.
+13. Do not add unnecessary dependencies, authentication systems, background workers, or complex infrastructure that the defined scope does not require.
+
+Do not claim that filesystem operations and MongoDB operations are fully atomic. Build safe compensation and retry behavior instead.
+
+---
+
+## 15. Implementation and Execution Instructions
+
+Follow this implementation sequence internally, but do not stop after describing it.
+
+### Phase 1: Inspect and scaffold
+
+- Inspect the current workspace.
+- Create or adapt the project structure.
+- Configure dependencies and npm scripts.
+- Add environment examples and `.gitignore`.
+
+### Phase 2: Build the backend
+
+- Connect Mongoose to MongoDB.
+- Implement the metadata schema.
+- Implement Multer temporary storage.
+- Implement extension, encoding, size, and JSON validation.
+- Implement upload and storage-cleanup behavior.
+- Implement list, download, and deletion endpoints.
+- Implement ID validation and centralized error handling.
+- Implement the health endpoint.
+- Implement OpenAPI and Swagger UI.
+
+### Phase 3: Build the frontend
+
+- Implement the dashboard.
+- Implement upload selection and drag-and-drop.
+- Implement upload feedback.
+- Implement the document list.
+- Implement real download behavior.
+- Implement delete confirmation and API integration.
+- Implement loading, error and empty states.
+- Ensure the UI is responsive and accessible.
+
+### Phase 4: Test and fix
+
+- Install dependencies.
+- Run frontend and backend tests.
+- Run the production frontend build.
+- Resolve integration and runtime errors.
+- Test the full upload-list-download-delete workflow.
+- Verify that the MongoDB records and filesystem contents remain consistent after ordinary failures.
+- Do not ignore failing tests or leave placeholder functions for required features.
+
+If the environment lacks a configured MongoDB server, explain how to configure one and still run all tests that can be exercised with isolated test infrastructure.
+
+### Phase 5: Final review
+
+Inspect the finished project for:
+
+- Missing imports or files.
+- Broken routes.
+- Inconsistent frontend and backend contracts.
+- Incorrect status codes.
+- Storage cleanup defects.
+- Hardcoded sample data.
+- Unused or unnecessary dependencies.
+- Missing environment examples.
+- Incomplete OpenAPI definitions.
+- Failing tests or build errors.
+
+Fix discovered issues rather than merely listing them.
+
+---
+
+## 16. Acceptance Criteria
+
+Consider the project complete only when the following are satisfied:
+
+- [ ] React frontend and Express backend are connected.
+- [ ] MongoDB persistence works.
+- [ ] `.txt`, `.md`, and `.json` files can be uploaded.
+- [ ] Malformed JSON and invalid or unsupported files are rejected.
+- [ ] Upload limits are configurable and enforced by the backend.
+- [ ] Document metadata is stored successfully.
+- [ ] The document list is ordered newest first.
+- [ ] Actual documents can be downloaded.
+- [ ] Deletion handles both file storage and metadata.
+- [ ] Partial failures are handled and recoverable where designed.
+- [ ] The UI includes loading, empty, validation, and failure states.
+- [ ] The application uses real API data rather than hardcoded documents.
+- [ ] OpenAPI and Swagger UI are available.
+- [ ] Automated tests cover core success and failure scenarios.
+- [ ] The frontend builds successfully.
+- [ ] The README contains installation, configuration, execution, testing, and API documentation instructions.
+- [ ] No secrets or uploaded user documents are committed.
+- [ ] No AI chat, document question-answering, or other features outside the requested scope have been added.
+
+---
+
+## 17. Required Final Deliverable
+
+Deliver the complete implementation in the project workspace.
+
+When the implementation is finished, provide a concise report containing:
+
+1. The final project structure.
+2. The features implemented.
+3. The API endpoint list.
+4. Required environment variables.
+5. Exact installation and startup commands.
+6. How to access the frontend and Swagger UI.
+7. The tests executed and their actual pass/fail results.
+8. Any remaining configuration requirements or limitations.
+
+Be transparent about anything that could not be tested because of unavailable infrastructure.
+
+**Final instruction:** Prioritize a fully functional and verifiable application over a visually impressive but nonfunctional prototype. Implement the complete Document Management workflow with clean code, safe file handling, real database persistence, a professional React UI, accurate API documentation, and meaningful automated tests. Do not stop at generating a design or partial code samples.

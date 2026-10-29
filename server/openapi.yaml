@@ -1,0 +1,318 @@
+openapi: 3.0.3
+info:
+  title: Document Vault API
+  description: Production-grade REST API for uploading, listing, streaming, and managing text, markdown, and JSON documents with MongoDB metadata persistence and local filesystem storage.
+  version: 1.0.0
+  contact:
+    name: Document Vault Engineering Team
+servers:
+  - url: /api
+    description: Current Base API Server
+
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Returns service status, uptime, and database connectivity.
+      tags:
+        - System
+      responses:
+        '200':
+          description: Service and database are healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Service degraded (e.g. database disconnected).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /documents:
+    post:
+      summary: Upload a new document
+      description: Uploads a single document file (.txt, .md, or .json) up to 5MB. Validates text encoding and JSON syntax before persisting metadata to MongoDB and moving the file to disk storage.
+      tags:
+        - Documents
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The document file to upload (.txt, .md, or .json). Max size 5MB.
+      responses:
+        '201':
+          description: Document uploaded and persisted successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadSuccessResponse'
+        '400':
+          description: Invalid upload request (missing file, empty file, non-UTF8 content, or malformed JSON).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Upload exceeds configured maximum file size limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '415':
+          description: Unsupported media type (only .txt, .md, and .json permitted).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal storage or database failure with safe rollback.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      summary: List all documents
+      description: Retrieves metadata for all ready documents, sorted in descending order (newest first).
+      tags:
+        - Documents
+      responses:
+        '200':
+          description: List of documents retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentListResponse'
+        '500':
+          description: Database retrieval error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /documents/{id}/download:
+    get:
+      summary: Download document file
+      description: Streams the original document file from local storage using its original filename in the Content-Disposition header.
+      tags:
+        - Documents
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: MongoDB ObjectId of the document.
+          schema:
+            type: string
+            example: "67215c0e189a022567df48ab"
+      responses:
+        '200':
+          description: File stream returned as binary attachment.
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: attachment; filename="report.json"
+            Content-Type:
+              schema:
+                type: string
+                example: application/json
+          content:
+            text/plain:
+              schema:
+                type: string
+                format: binary
+            text/markdown:
+              schema:
+                type: string
+                format: binary
+            application/json:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Malformed MongoDB identifier format.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Document metadata not found or physical file missing on disk.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /documents/{id}/preview:
+    get:
+      summary: Preview document content
+      description: Retrieves UTF-8 text contents for in-browser modal inspection.
+      tags:
+        - Documents
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: MongoDB ObjectId of the document.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Document metadata and decoded content string.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  document:
+                    $ref: '#/components/schemas/PublicDocument'
+                  content:
+                    type: string
+                    example: "# Project Overview\n\nAll tasks completed."
+        '400':
+          description: Invalid document ID format.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Document not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /documents/{id}:
+    delete:
+      summary: Delete a document
+      description: Executes a two-phase deletion. Marks document as deleting, removes the physical file from disk storage, and cleans up the MongoDB metadata.
+      tags:
+        - Documents
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: MongoDB ObjectId of the document.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Document deleted successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Document deleted successfully
+                  id:
+                    type: string
+                    example: "67215c0e189a022567df48ab"
+                  originalName:
+                    type: string
+                    example: "notes.txt"
+        '400':
+          description: Malformed MongoDB identifier format.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Document not found or already deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    PublicDocument:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "67215c0e189a022567df48ab"
+        originalName:
+          type: string
+          example: "project-spec.md"
+        extension:
+          type: string
+          enum: [".txt", ".md", ".json"]
+          example: ".md"
+        mimeType:
+          type: string
+          enum: ["text/plain", "text/markdown", "application/json"]
+          example: "text/markdown"
+        size:
+          type: integer
+          description: File size in bytes.
+          example: 4096
+        status:
+          type: string
+          enum: ["ready", "deleting"]
+          example: "ready"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-10-29T08:30:00.000Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2026-10-29T08:30:00.000Z"
+
+    UploadSuccessResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "Document uploaded successfully"
+        document:
+          $ref: '#/components/schemas/PublicDocument'
+
+    DocumentListResponse:
+      type: object
+      properties:
+        documents:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicDocument'
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "healthy"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-10-29T09:00:00.000Z"
+        database:
+          type: string
+          example: "connected"
+        uptime:
+          type: number
+          example: 124.5
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: "MALFORMED_JSON"
+            message:
+              type: string
+              example: "The uploaded JSON file contains syntax errors: Unexpected token } in JSON at position 12"
