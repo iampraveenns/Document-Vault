@@ -44,12 +44,16 @@
     "@types/uuid": "^10.0.0",
     "@types/yamljs": "^0.2.34",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.0",
     "mongodb-memory-server": "^11.3.0",
     "supertest": "^7.3.1",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "mongodb-memory-server@11.3.0": true
   }
 }
