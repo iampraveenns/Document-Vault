@@ -68,13 +68,13 @@ export const DocumentsPage: React.FC = () => {
         />
       </main>
 
-      {/* Footer */}
+      {/* Clean User-Facing Footer */}
       <footer className="border-t border-slate-200 bg-white py-5 mt-auto">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-slate-700">Document Vault</span>
             <span>—</span>
-            <span>Production MERN Architecture</span>
+            <span>Secure File Workspace</span>
           </div>
           <div className="flex items-center gap-4">
             <a
@@ -83,10 +83,10 @@ export const DocumentsPage: React.FC = () => {
               rel="noopener noreferrer"
               className="hover:text-indigo-600 transition-colors"
             >
-              OpenAPI 3.0 Specification
+              API Reference
             </a>
             <span className="text-slate-300">|</span>
-            <span>AWS S3 / Cloudflare R2 Cloud Storage</span>
+            <span>Supported: .txt, .md, .json (up to 5 MB)</span>
           </div>
         </div>
       </footer>

@@ -1,5 +1,6 @@
 export interface PublicDocument {
   _id: string;
+  userId?: string;
   originalName: string;
   extension: '.txt' | '.md' | '.json';
   mimeType: string;
@@ -21,12 +22,43 @@ export interface ApiErrorResponse {
 export interface HealthStatus {
   status: string;
   database: string;
+  storageProvider?: string;
   timestamp: string;
   uptime: number;
 }
 
 const RAW_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 const API_BASE = RAW_BASE_URL.replace(/\/+$/, '');
+const TOKEN_KEY = 'document_vault_token';
+
+let inMemoryToken: string | null = null;
+
+export function setAuthToken(token: string | null) {
+  inMemoryToken = token;
+  if (token) {
+    localStorage.setItem(TOKEN_KEY, token);
+  } else {
+    localStorage.removeItem(TOKEN_KEY);
+  }
+}
+
+export function getAuthToken(): string | null {
+  if (inMemoryToken) return inMemoryToken;
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function getAuthHeaders(existingHeaders: HeadersInit = {}): HeadersInit {
+  const token = getAuthToken();
+  const headers: Record<string, string> = { ...existingHeaders as Record<string, string> };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
 
 class ApiClientError extends Error {
   code: string;
@@ -63,10 +95,12 @@ async function handleResponse<T>(res: Response): Promise<T> {
 
 export const documentsApi = {
   /**
-   * Fetch all documents from the backend, sorted newest first
+   * Fetch all documents for authenticated user, sorted newest first
    */
   async fetchDocuments(): Promise<PublicDocument[]> {
-    const res = await fetch(`${API_BASE}/api/documents`);
+    const res = await fetch(`${API_BASE}/api/documents`, {
+      headers: getAuthHeaders(),
+    });
     const data = await handleResponse<{ documents: PublicDocument[] }>(res);
     return data.documents;
   },
@@ -80,8 +114,8 @@ export const documentsApi = {
 
     const res = await fetch(`${API_BASE}/api/documents`, {
       method: 'POST',
+      headers: getAuthHeaders(),
       body: formData,
-      // Note: Do not set Content-Type header so the browser automatically generates boundary
     });
 
     return handleResponse<{ message: string; document: PublicDocument }>(res);
@@ -91,7 +125,9 @@ export const documentsApi = {
    * Trigger real file download in the browser
    */
   async downloadDocument(id: string, originalName: string): Promise<void> {
-    const res = await fetch(`${API_BASE}/api/documents/${id}/download`);
+    const res = await fetch(`${API_BASE}/api/documents/${id}/download`, {
+      headers: getAuthHeaders(),
+    });
 
     if (!res.ok) {
       let msg = `Download failed with status ${res.status}`;
@@ -121,7 +157,9 @@ export const documentsApi = {
    * Preview text content of a document
    */
   async fetchDocumentPreview(id: string): Promise<{ document: PublicDocument; content: string }> {
-    const res = await fetch(`${API_BASE}/api/documents/${id}/preview`);
+    const res = await fetch(`${API_BASE}/api/documents/${id}/preview`, {
+      headers: getAuthHeaders(),
+    });
     return handleResponse<{ document: PublicDocument; content: string }>(res);
   },
 
@@ -131,12 +169,13 @@ export const documentsApi = {
   async deleteDocument(id: string): Promise<{ message: string; id: string; originalName?: string }> {
     const res = await fetch(`${API_BASE}/api/documents/${id}`, {
       method: 'DELETE',
+      headers: getAuthHeaders(),
     });
     return handleResponse<{ message: string; id: string; originalName?: string }>(res);
   },
 
   /**
-   * Check system and database health
+   * Check system, database, and cloud storage health
    */
   async checkHealth(): Promise<HealthStatus> {
     const res = await fetch(`${API_BASE}/api/health`);

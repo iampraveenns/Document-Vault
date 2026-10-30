@@ -6,15 +6,18 @@ import { AppError } from '../utils/AppError.ts';
 export class DocumentController {
   /**
    * POST /api/documents
-   * Upload and process a new document directly into Cloud Object Storage
+   * Upload and process a new document directly into Cloud Object Storage scoped to user
    */
   async upload(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      if (!req.user?.id) {
+        throw new AppError(401, 'UNAUTHORIZED', 'Authentication required.');
+      }
       if (!req.validatedFile) {
         throw new AppError(400, 'MISSING_FILE', 'No validated file received.');
       }
 
-      const document = await documentService.uploadDocument(req.validatedFile);
+      const document = await documentService.uploadDocument(req.validatedFile, req.user.id);
 
       res.status(201).json({
         message: 'Document uploaded successfully',
@@ -27,11 +30,15 @@ export class DocumentController {
 
   /**
    * GET /api/documents
-   * List all ready documents, newest first
+   * List all ready documents for authenticated user, newest first
    */
-  async list(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  async list(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const documents = await documentService.listDocuments();
+      if (!req.user?.id) {
+        throw new AppError(401, 'UNAUTHORIZED', 'Authentication required.');
+      }
+
+      const documents = await documentService.listDocuments(req.user.id);
       res.status(200).json({ documents });
     } catch (error) {
       next(error);
@@ -44,11 +51,15 @@ export class DocumentController {
    */
   async download(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      if (!req.user?.id) {
+        throw new AppError(401, 'UNAUTHORIZED', 'Authentication required.');
+      }
+
       const { id } = req.params;
       const wantsPresigned = req.query.presigned === 'true';
 
       const { document, stream, contentType, contentLength, presignedUrl } =
-        await documentService.getDocumentForDownload(id);
+        await documentService.getDocumentForDownload(id, req.user.id);
 
       // If client explicitly requests the pre-signed URL (e.g. for direct client-to-S3 download)
       if (wantsPresigned && presignedUrl) {
@@ -97,8 +108,12 @@ export class DocumentController {
    */
   async preview(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      if (!req.user?.id) {
+        throw new AppError(401, 'UNAUTHORIZED', 'Authentication required.');
+      }
+
       const { id } = req.params;
-      const previewData = await documentService.getDocumentContent(id);
+      const previewData = await documentService.getDocumentContent(id, req.user.id);
       res.status(200).json(previewData);
     } catch (error) {
       next(error);
@@ -111,8 +126,12 @@ export class DocumentController {
    */
   async remove(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      if (!req.user?.id) {
+        throw new AppError(401, 'UNAUTHORIZED', 'Authentication required.');
+      }
+
       const { id } = req.params;
-      const result = await documentService.deleteDocument(id);
+      const result = await documentService.deleteDocument(id, req.user.id);
 
       res.status(200).json({
         message: 'Document deleted successfully',

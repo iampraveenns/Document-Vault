@@ -3,6 +3,7 @@ import cors from 'cors';
 import path from 'path';
 import swaggerUi from 'swagger-ui-express';
 import YAML from 'yamljs';
+import authRoutes from './routes/authRoutes.ts';
 import documentRoutes from './routes/documentRoutes.ts';
 import { documentController } from './controllers/documentController.ts';
 import { errorHandler } from './middleware/errorHandler.ts';
@@ -42,7 +43,10 @@ export async function createApp(): Promise<Express> {
     documentController.health(req, res).catch(next);
   });
 
-  // Document Management REST endpoints
+  // Authentication routes
+  app.use('/api/auth', authRoutes);
+
+  // Protected Document Management REST endpoints
   app.use('/api/documents', documentRoutes);
 
   // 404 handler for undefined API routes

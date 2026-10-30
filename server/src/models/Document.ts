@@ -5,6 +5,7 @@ export type AllowedMimeType = 'text/plain' | 'text/markdown' | 'application/json
 export type DocumentStatus = 'ready' | 'deleting';
 
 export interface IDocument extends MongooseDocument {
+  userId: mongoose.Types.ObjectId;
   originalName: string;
   s3Key: string;
   bucket: string;
@@ -19,6 +20,7 @@ export interface IDocument extends MongooseDocument {
 
 export interface PublicDocument {
   _id: string;
+  userId?: string;
   originalName: string;
   extension: AllowedExtension;
   mimeType: AllowedMimeType;
@@ -32,6 +34,12 @@ export interface PublicDocument {
 
 const DocumentSchema = new Schema<IDocument>(
   {
+    userId: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      required: [true, 'User ID is required'],
+      index: true,
+    },
     originalName: {
       type: String,
       required: [true, 'Original filename is required'],
@@ -87,12 +95,13 @@ const DocumentSchema = new Schema<IDocument>(
   }
 );
 
-// Index to efficiently query documents ordered newest first
-DocumentSchema.index({ createdAt: -1, _id: -1 });
+// Compound index to efficiently query documents for a specific user ordered newest first
+DocumentSchema.index({ userId: 1, createdAt: -1, _id: -1 });
 
 export function formatPublicDocument(doc: IDocument): PublicDocument {
   return {
     _id: doc._id.toString(),
+    userId: doc.userId ? doc.userId.toString() : undefined,
     originalName: doc.originalName,
     extension: doc.extension,
     mimeType: doc.mimeType,

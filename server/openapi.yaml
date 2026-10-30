@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: Document Vault API
-  description: Production-grade REST API for uploading, listing, streaming, and managing text, markdown, and JSON documents with MongoDB Atlas metadata persistence and AWS S3 / Cloudflare R2 cloud object storage.
-  version: 1.0.0
+  description: Production-grade REST API for user authentication (JWT + bcrypt), uploading, listing, streaming, and managing text, markdown, and JSON documents with MongoDB Atlas metadata persistence and AWS S3 / Cloudflare R2 cloud object storage.
+  version: 2.0.0
   contact:
     name: Document Vault Engineering Team
 servers:
@@ -30,12 +30,128 @@ paths:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
 
+  /auth/signup:
+    post:
+      summary: Register a new user
+      description: Validates email format and password strength (min 6 characters), hashes the password with bcrypt, creates the user in MongoDB, and returns a signed JWT token.
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "alice@example.com"
+                password:
+                  type: string
+                  format: password
+                  minLength: 6
+                  example: "secret123"
+      responses:
+        '201':
+          description: User registered successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSuccessResponse'
+        '400':
+          description: Missing fields, invalid email format, or weak password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Email already in use.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/login:
+    post:
+      summary: Authenticate user credentials
+      description: Compares provided credentials against stored bcrypt password hashes and returns a signed JWT token on success.
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "alice@example.com"
+                password:
+                  type: string
+                  format: password
+                  example: "secret123"
+      responses:
+        '200':
+          description: Login successful.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSuccessResponse'
+        '400':
+          description: Missing email or password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Invalid email or password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/me:
+    get:
+      summary: Get current authenticated user profile
+      description: Verifies Bearer JWT token and returns the current user profile.
+      tags:
+        - Authentication
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User profile retrieved successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/PublicUser'
+        '401':
+          description: Missing, invalid, or expired JWT token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /documents:
     post:
       summary: Upload a new document to Cloud Object Storage
-      description: Uploads a single document file (.txt, .md, or .json) up to 5MB. Validates in-memory text encoding and JSON syntax before persisting metadata to MongoDB Atlas and streaming the file directly to an AWS S3 / Cloudflare R2 bucket using unique UUID-based keys.
+      description: Uploads a single document file (.txt, .md, or .json) up to 5MB. Scoped to the authenticated user. Validates in-memory text encoding and JSON syntax before persisting metadata to MongoDB Atlas and streaming the file directly to an AWS S3 / Cloudflare R2 bucket.
       tags:
         - Documents
+      security:
+        - BearerAuth: []
       requestBody:
         required: true
         content:
@@ -62,6 +178,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized. Valid Bearer token required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '413':
           description: Upload exceeds configured maximum file size limit.
           content:
@@ -74,18 +196,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Cloud storage or database failure with safe rollback.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
 
     get:
       summary: List all documents
-      description: Retrieves metadata for all ready documents from MongoDB, sorted in descending order (newest first).
+      description: Retrieves metadata for all ready documents belonging to the authenticated user from MongoDB, sorted in descending order (newest first).
       tags:
         - Documents
+      security:
+        - BearerAuth: []
       responses:
         '200':
           description: List of documents retrieved successfully.
@@ -93,8 +211,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DocumentListResponse'
-        '500':
-          description: Database retrieval error.
+        '401':
+          description: Unauthorized. Valid Bearer token required.
           content:
             application/json:
               schema:
@@ -103,9 +221,11 @@ paths:
   /documents/{id}/download:
     get:
       summary: Download document file or get pre-signed URL
-      description: Streams the document file directly from Cloud Object Storage with original filename in the Content-Disposition header. If ?presigned=true query parameter is supplied, returns an ephemeral pre-signed download URL.
+      description: Streams the document file directly from Cloud Object Storage with original filename in the Content-Disposition header. Only accessible by the document owner.
       tags:
         - Documents
+      security:
+        - BearerAuth: []
       parameters:
         - name: id
           in: path
@@ -113,57 +233,23 @@ paths:
           description: MongoDB ObjectId of the document.
           schema:
             type: string
-            example: "67215c0e189a022567df48ab"
         - name: presigned
           in: query
           required: false
           description: If true, returns an ephemeral pre-signed S3 download URL as JSON instead of streaming.
           schema:
             type: boolean
-            example: false
       responses:
         '200':
           description: File stream returned as binary attachment or JSON containing presigned URL.
-          headers:
-            Content-Disposition:
-              schema:
-                type: string
-                example: attachment; filename="report.json"
-            Content-Type:
-              schema:
-                type: string
-                example: application/json
-            X-Presigned-Url:
-              schema:
-                type: string
-                description: Ephemeral pre-signed S3 download URL.
-          content:
-            text/plain:
-              schema:
-                type: string
-                format: binary
-            text/markdown:
-              schema:
-                type: string
-                format: binary
-            application/json:
-              schema:
-                oneOf:
-                  - type: string
-                    format: binary
-                  - type: object
-                    properties:
-                      downloadUrl:
-                        type: string
-                        example: "https://bucket.s3.amazonaws.com/documents/uuid.json?X-Amz-Signature=..."
-        '400':
-          description: Malformed MongoDB identifier format.
+        '401':
+          description: Unauthorized.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: Document metadata not found or physical file missing in cloud storage.
+          description: Document metadata not found or user lacks ownership.
           content:
             application/json:
               schema:
@@ -172,9 +258,11 @@ paths:
   /documents/{id}/preview:
     get:
       summary: Preview document content from S3
-      description: Streams UTF-8 text contents directly from Cloud Object Storage for in-browser modal inspection.
+      description: Streams UTF-8 text contents directly from Cloud Object Storage for in-browser modal inspection. Only accessible by the document owner.
       tags:
         - Documents
+      security:
+        - BearerAuth: []
       parameters:
         - name: id
           in: path
@@ -185,24 +273,14 @@ paths:
       responses:
         '200':
           description: Document metadata and decoded content string.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  document:
-                    $ref: '#/components/schemas/PublicDocument'
-                  content:
-                    type: string
-                    example: "# Project Overview\n\nAll tasks completed."
-        '400':
-          description: Invalid document ID format.
+        '401':
+          description: Unauthorized.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: Document not found in database or cloud storage.
+          description: Document not found or unauthorized.
           content:
             application/json:
               schema:
@@ -211,9 +289,11 @@ paths:
   /documents/{id}:
     delete:
       summary: Delete a document from S3 and MongoDB
-      description: Executes a two-phase deletion. Marks document as deleting in MongoDB, executes DeleteObjectCommand on the S3 bucket to wipe the object, and cleans up the MongoDB metadata record.
+      description: Executes a two-phase deletion. Marks document as deleting, deletes S3 object, and removes MongoDB record. Only accessible by the document owner.
       tags:
         - Documents
+      security:
+        - BearerAuth: []
       parameters:
         - name: id
           in: path
@@ -224,22 +304,8 @@ paths:
       responses:
         '200':
           description: Document and cloud object deleted successfully.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: Document deleted successfully
-                  id:
-                    type: string
-                    example: "67215c0e189a022567df48ab"
-                  originalName:
-                    type: string
-                    example: "notes.txt"
-        '400':
-          description: Malformed MongoDB identifier format.
+        '401':
+          description: Unauthorized.
           content:
             application/json:
               schema:
@@ -252,13 +318,48 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 
 components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Enter your signed JWT token obtained from /api/auth/signup or /api/auth/login.
+
   schemas:
+    PublicUser:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "67215c0e189a022567df48ab"
+        email:
+          type: string
+          example: "alice@example.com"
+        createdAt:
+          type: string
+          format: date-time
+
+    AuthSuccessResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "Login successful"
+        token:
+          type: string
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        user:
+          $ref: '#/components/schemas/PublicUser'
+
     PublicDocument:
       type: object
       properties:
         _id:
           type: string
           example: "67215c0e189a022567df48ab"
+        userId:
+          type: string
+          example: "67215c0e189a022567df4800"
         originalName:
           type: string
           example: "project-spec.md"
@@ -272,7 +373,6 @@ components:
           example: "text/markdown"
         size:
           type: integer
-          description: File size in bytes.
           example: 4096
         bucket:
           type: string
@@ -287,11 +387,9 @@ components:
         createdAt:
           type: string
           format: date-time
-          example: "2026-10-29T08:30:00.000Z"
         updatedAt:
           type: string
           format: date-time
-          example: "2026-10-29T08:30:00.000Z"
 
     UploadSuccessResponse:
       type: object
@@ -319,7 +417,6 @@ components:
         timestamp:
           type: string
           format: date-time
-          example: "2026-10-29T09:00:00.000Z"
         database:
           type: string
           example: "connected"
@@ -338,7 +435,7 @@ components:
           properties:
             code:
               type: string
-              example: "MALFORMED_JSON"
+              example: "UNAUTHORIZED"
             message:
               type: string
-              example: "The uploaded JSON file contains syntax errors: Unexpected token } in JSON at position 12"
+              example: "Authentication required. Please provide a valid Bearer token."

@@ -15,11 +15,11 @@ import { AppError } from '../utils/AppError.ts';
 export class DocumentService {
   /**
    * Process and persist a validated file: streams buffer directly to cloud S3 bucket
-   * and saves cloud-specific reference properties (s3Key, bucket, region) in MongoDB.
+   * and saves user-scoped reference properties (userId, s3Key, bucket, region) in MongoDB.
    */
-  async uploadDocument(fileInfo: ValidatedFileInfo): Promise<PublicDocument> {
+  async uploadDocument(fileInfo: ValidatedFileInfo, userId: string): Promise<PublicDocument> {
     const uniqueId = uuidv4();
-    const s3Key = `documents/${uniqueId}${fileInfo.extension}`;
+    const s3Key = `documents/${userId}/${uniqueId}${fileInfo.extension}`;
     let uploadSuccess = false;
 
     try {
@@ -29,13 +29,15 @@ export class DocumentService {
         fileInfo.buffer,
         fileInfo.mimeType,
         {
+          userId,
           originalName: encodeURIComponent(fileInfo.originalName),
         }
       );
       uploadSuccess = true;
 
-      // 2. Persist metadata in MongoDB Atlas with cloud properties
+      // 2. Persist metadata in MongoDB Atlas scoped to the authenticated user
       const doc = await DocumentModel.create({
+        userId: new mongoose.Types.ObjectId(userId),
         originalName: fileInfo.originalName,
         s3Key: s3Result.key,
         bucket: s3Result.bucket,
@@ -65,10 +67,13 @@ export class DocumentService {
   }
 
   /**
-   * Retrieve all ready documents from MongoDB, sorted newest first.
+   * Retrieve all ready documents for the authenticated user, sorted newest first.
    */
-  async listDocuments(): Promise<PublicDocument[]> {
-    const docs = await DocumentModel.find({ status: 'ready' })
+  async listDocuments(userId: string): Promise<PublicDocument[]> {
+    const docs = await DocumentModel.find({
+      userId: new mongoose.Types.ObjectId(userId),
+      status: 'ready',
+    })
       .sort({ createdAt: -1, _id: -1 })
       .exec();
 
@@ -76,9 +81,9 @@ export class DocumentService {
   }
 
   /**
-   * Retrieve document metadata and stream directly from S3, with optional presigned URL.
+   * Retrieve document metadata and stream directly from S3, ensuring ownership.
    */
-  async getDocumentForDownload(id: string): Promise<{
+  async getDocumentForDownload(id: string, userId: string): Promise<{
     document: IDocument;
     stream: Readable;
     contentType: string;
@@ -89,7 +94,12 @@ export class DocumentService {
       throw new AppError(400, 'INVALID_DOCUMENT_ID', `Invalid document identifier format: '${id}'`);
     }
 
-    const doc = await DocumentModel.findOne({ _id: id, status: 'ready' }).exec();
+    const doc = await DocumentModel.findOne({
+      _id: id,
+      userId: new mongoose.Types.ObjectId(userId),
+      status: 'ready',
+    }).exec();
+
     if (!doc) {
       throw new AppError(404, 'DOCUMENT_NOT_FOUND', 'The requested document does not exist or has been removed.');
     }
@@ -110,14 +120,19 @@ export class DocumentService {
   }
 
   /**
-   * Read file content directly from S3 for in-browser text/markdown/json preview.
+   * Read file content directly from S3 for in-browser text/markdown/json preview, ensuring ownership.
    */
-  async getDocumentContent(id: string): Promise<{ document: PublicDocument; content: string }> {
+  async getDocumentContent(id: string, userId: string): Promise<{ document: PublicDocument; content: string }> {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       throw new AppError(400, 'INVALID_DOCUMENT_ID', `Invalid document identifier format: '${id}'`);
     }
 
-    const doc = await DocumentModel.findOne({ _id: id, status: 'ready' }).exec();
+    const doc = await DocumentModel.findOne({
+      _id: id,
+      userId: new mongoose.Types.ObjectId(userId),
+      status: 'ready',
+    }).exec();
+
     if (!doc) {
       throw new AppError(404, 'DOCUMENT_NOT_FOUND', 'The requested document does not exist.');
     }
@@ -131,17 +146,18 @@ export class DocumentService {
   }
 
   /**
-   * Safely delete a document using two-phase deletion:
-   * 1. Mark status as 'deleting' in MongoDB
-   * 2. Execute DeleteObjectCommand in cloud storage
-   * 3. Wipe MongoDB document metadata record
+   * Safely delete a document using two-phase deletion, ensuring ownership.
    */
-  async deleteDocument(id: string): Promise<{ id: string; originalName: string }> {
+  async deleteDocument(id: string, userId: string): Promise<{ id: string; originalName: string }> {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       throw new AppError(400, 'INVALID_DOCUMENT_ID', `Invalid document identifier format: '${id}'`);
     }
 
-    const doc = await DocumentModel.findById(id).exec();
+    const doc = await DocumentModel.findOne({
+      _id: id,
+      userId: new mongoose.Types.ObjectId(userId),
+    }).exec();
+
     if (!doc) {
       throw new AppError(404, 'DOCUMENT_NOT_FOUND', 'Document not found or already deleted.');
     }

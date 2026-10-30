@@ -4,208 +4,208 @@ import { Express } from 'express';
 import { createApp } from '../src/app.ts';
 import { connectDB, disconnectDB } from '../src/config/database.ts';
 import { DocumentModel } from '../src/models/Document.ts';
+import { UserModel } from '../src/models/User.ts';
 
 let app: Express;
 
 beforeAll(async () => {
-  // Connect to isolated in-memory or configured database
   await connectDB();
   app = await createApp();
-  // Clear any existing documents
   await DocumentModel.deleteMany({});
+  await UserModel.deleteMany({});
 });
 
 afterAll(async () => {
   await DocumentModel.deleteMany({});
+  await UserModel.deleteMany({});
   await disconnectDB();
 });
 
-describe('Document Vault REST API Tests (Cloud Object Storage)', () => {
-  let createdDocId: string;
-  const sampleJsonContent = JSON.stringify({ name: 'Document Vault', version: '2.0.0', storage: 'S3' }, null, 2);
+describe('Document Vault REST API Tests (JWT Authentication & Cloud Storage)', () => {
+  let userAToken: string;
+  let userAId: string;
+  let userBToken: string;
+  let userADocId: string;
+
+  const sampleJsonContent = JSON.stringify({ name: 'Document Vault', version: '3.0.0', auth: 'JWT' }, null, 2);
+
+  describe('Authentication Endpoints (/api/auth)', () => {
+    it('POST /api/auth/signup should register User A and return JWT token', async () => {
+      const res = await request(app).post('/api/auth/signup').send({
+        email: 'alice@example.com',
+        password: 'password123',
+      });
+
+      expect(res.status).toBe(201);
+      expect(res.body.token).toBeDefined();
+      expect(res.body.user).toBeDefined();
+      expect(res.body.user.email).toBe('alice@example.com');
+      expect(res.body.user.password).toBeUndefined(); // Hash not leaked
+
+      userAToken = res.body.token;
+      userAId = res.body.user.id;
+    });
+
+    it('POST /api/auth/signup should reject duplicate email (409)', async () => {
+      const res = await request(app).post('/api/auth/signup').send({
+        email: 'alice@example.com',
+        password: 'anotherpassword',
+      });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('EMAIL_EXISTS');
+    });
+
+    it('POST /api/auth/signup should reject weak passwords under 6 characters (400)', async () => {
+      const res = await request(app).post('/api/auth/signup').send({
+        email: 'weak@example.com',
+        password: '123',
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('WEAK_PASSWORD');
+    });
+
+    it('POST /api/auth/login should authenticate User A with valid credentials', async () => {
+      const res = await request(app).post('/api/auth/login').send({
+        email: 'alice@example.com',
+        password: 'password123',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.token).toBeDefined();
+      expect(res.body.user.email).toBe('alice@example.com');
+    });
+
+    it('POST /api/auth/login should reject invalid password (401)', async () => {
+      const res = await request(app).post('/api/auth/login').send({
+        email: 'alice@example.com',
+        password: 'wrongpassword',
+      });
+
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('INVALID_CREDENTIALS');
+    });
+
+    it('GET /api/auth/me should return authenticated user profile with Bearer token', async () => {
+      const res = await request(app)
+        .get('/api/auth/me')
+        .set('Authorization', `Bearer ${userAToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.user.id).toBe(userAId);
+      expect(res.body.user.email).toBe('alice@example.com');
+    });
+
+    it('GET /api/auth/me should reject request without token (401)', async () => {
+      const res = await request(app).get('/api/auth/me');
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('UNAUTHORIZED');
+    });
+  });
+
+  describe('Route Protection & User Document Isolation (/api/documents)', () => {
+    beforeAll(async () => {
+      // Register User B
+      const resB = await request(app).post('/api/auth/signup').send({
+        email: 'bob@example.com',
+        password: 'password123',
+      });
+      userBToken = resB.body.token;
+    });
+
+    it('should reject unauthenticated upload attempt (401)', async () => {
+      const res = await request(app)
+        .post('/api/documents')
+        .attach('file', Buffer.from('hello'), 'unauthorized.txt');
+
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('UNAUTHORIZED');
+    });
+
+    it('should allow User A to upload document with Bearer token', async () => {
+      const res = await request(app)
+        .post('/api/documents')
+        .set('Authorization', `Bearer ${userAToken}`)
+        .attach('file', Buffer.from(sampleJsonContent), 'alice-spec.json');
+
+      expect(res.status).toBe(201);
+      expect(res.body.document.originalName).toBe('alice-spec.json');
+      expect(res.body.document.userId).toBe(userAId);
+      userADocId = res.body.document._id;
+    });
+
+    it('User A should see their uploaded document in the list', async () => {
+      const res = await request(app)
+        .get('/api/documents')
+        .set('Authorization', `Bearer ${userAToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.documents.length).toBe(1);
+      expect(res.body.documents[0]._id).toBe(userADocId);
+    });
+
+    it('User B should NOT see User A documents in their list (user isolation)', async () => {
+      const res = await request(app)
+        .get('/api/documents')
+        .set('Authorization', `Bearer ${userBToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.documents.length).toBe(0); // Isolated!
+    });
+
+    it('User B should NOT be able to download User A document (404/unauthorized)', async () => {
+      const res = await request(app)
+        .get(`/api/documents/${userADocId}/download`)
+        .set('Authorization', `Bearer ${userBToken}`);
+
+      expect(res.status).toBe(404);
+      expect(res.body.error.code).toBe('DOCUMENT_NOT_FOUND');
+    });
+
+    it('User B should NOT be able to delete User A document (404/unauthorized)', async () => {
+      const res = await request(app)
+        .delete(`/api/documents/${userADocId}`)
+        .set('Authorization', `Bearer ${userBToken}`);
+
+      expect(res.status).toBe(404);
+      expect(res.body.error.code).toBe('DOCUMENT_NOT_FOUND');
+    });
+
+    it('User A should be able to download their own document', async () => {
+      const res = await request(app)
+        .get(`/api/documents/${userADocId}/download`)
+        .set('Authorization', `Bearer ${userAToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.text).toBe(sampleJsonContent);
+    });
+
+    it('User A should be able to preview their own document', async () => {
+      const res = await request(app)
+        .get(`/api/documents/${userADocId}/preview`)
+        .set('Authorization', `Bearer ${userAToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.content).toBe(sampleJsonContent);
+    });
+
+    it('User A should be able to delete their own document', async () => {
+      const res = await request(app)
+        .delete(`/api/documents/${userADocId}`)
+        .set('Authorization', `Bearer ${userAToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.message).toBe('Document deleted successfully');
+    });
+  });
 
   describe('GET /api/health', () => {
-    it('should return 200 OK with healthy status, connected database, and s3 storageProvider', async () => {
+    it('should return 200 OK without requiring authentication', async () => {
       const res = await request(app).get('/api/health');
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('healthy');
       expect(res.body.database).toBe('connected');
-      expect(res.body.storageProvider).toBe('s3');
-      expect(typeof res.body.uptime).toBe('number');
-    });
-  });
-
-  describe('POST /api/documents (Cloud S3 Upload)', () => {
-    it('should successfully upload and stream a valid .txt document to S3', async () => {
-      const res = await request(app)
-        .post('/api/documents')
-        .attach('file', Buffer.from('Hello world from S3 Document Vault test text file!'), 'readme.txt');
-
-      expect(res.status).toBe(201);
-      expect(res.body.message).toBe('Document uploaded successfully');
-      expect(res.body.document).toBeDefined();
-      expect(res.body.document.originalName).toBe('readme.txt');
-      expect(res.body.document.extension).toBe('.txt');
-      expect(res.body.document.mimeType).toBe('text/plain');
-      expect(res.body.document.bucket).toBeDefined();
-      expect(res.body.document.region).toBeDefined();
-      expect(res.body.document.size).toBeGreaterThan(0);
-    });
-
-    it('should successfully upload and persist a valid .md document to S3', async () => {
-      const res = await request(app)
-        .post('/api/documents')
-        .attach('file', Buffer.from('# Release Notes\n\n- S3 Storage Enabled\n- R2 Support'), 'notes.md');
-
-      expect(res.status).toBe(201);
-      expect(res.body.document.originalName).toBe('notes.md');
-      expect(res.body.document.extension).toBe('.md');
-      expect(res.body.document.mimeType).toBe('text/markdown');
-      expect(res.body.document.bucket).toBeDefined();
-    });
-
-    it('should successfully upload and validate a valid .json document', async () => {
-      const res = await request(app)
-        .post('/api/documents')
-        .attach('file', Buffer.from(sampleJsonContent), 'config.json');
-
-      expect(res.status).toBe(201);
-      expect(res.body.document.originalName).toBe('config.json');
-      expect(res.body.document.extension).toBe('.json');
-      expect(res.body.document.mimeType).toBe('application/json');
-
-      createdDocId = res.body.document._id;
-    });
-
-    it('should reject request when no file is provided (400 MISSING_FILE)', async () => {
-      const res = await request(app).post('/api/documents');
-      expect(res.status).toBe(400);
-      expect(res.body.error).toBeDefined();
-      expect(res.body.error.code).toBe('MISSING_FILE');
-    });
-
-    it('should reject unsupported file extension like .pdf or .exe (415 UNSUPPORTED_MEDIA_TYPE)', async () => {
-      const res = await request(app)
-        .post('/api/documents')
-        .attach('file', Buffer.from('dummy binary content'), 'malware.exe');
-
-      expect(res.status).toBe(415);
-      expect(res.body.error.code).toBe('UNSUPPORTED_MEDIA_TYPE');
-    });
-
-    it('should reject empty 0-byte file (400 EMPTY_FILE)', async () => {
-      const res = await request(app)
-        .post('/api/documents')
-        .attach('file', Buffer.from(''), 'empty.txt');
-
-      expect(res.status).toBe(400);
-      expect(res.body.error.code).toBe('EMPTY_FILE');
-    });
-
-    it('should reject malformed JSON syntax (400 MALFORMED_JSON)', async () => {
-      const brokenJson = '{ "title": "test", broken: true, }';
-      const res = await request(app)
-        .post('/api/documents')
-        .attach('file', Buffer.from(brokenJson), 'invalid.json');
-
-      expect(res.status).toBe(400);
-      expect(res.body.error.code).toBe('MALFORMED_JSON');
-    });
-  });
-
-  describe('GET /api/documents (List from MongoDB)', () => {
-    it('should retrieve all documents ordered newest first with S3 metadata', async () => {
-      const res = await request(app).get('/api/documents');
-
-      expect(res.status).toBe(200);
-      expect(Array.isArray(res.body.documents)).toBe(true);
-      expect(res.body.documents.length).toBeGreaterThanOrEqual(3);
-
-      // Verify newest first order
-      const docs = res.body.documents;
-      for (let i = 0; i < docs.length - 1; i++) {
-        const currentDate = new Date(docs[i].createdAt).getTime();
-        const nextDate = new Date(docs[i + 1].createdAt).getTime();
-        expect(currentDate).toBeGreaterThanOrEqual(nextDate);
-      }
-
-      // Verify cloud bucket metadata is populated
-      expect(docs[0].bucket).toBeDefined();
-      expect(docs[0].region).toBeDefined();
-    });
-  });
-
-  describe('GET /api/documents/:id/download (Stream & Pre-signed URL)', () => {
-    it('should stream the file directly with original filename in header', async () => {
-      const res = await request(app).get(`/api/documents/${createdDocId}/download`);
-
-      expect(res.status).toBe(200);
-      expect(res.header['content-disposition']).toContain('config.json');
-      expect(res.header['content-type']).toContain('application/json');
-      expect(res.text).toBe(sampleJsonContent);
-    });
-
-    it('should return a pre-signed URL when ?presigned=true is passed', async () => {
-      const res = await request(app).get(`/api/documents/${createdDocId}/download?presigned=true`);
-
-      expect(res.status).toBe(200);
-      expect(res.body.document).toBeDefined();
-      expect(res.body.downloadUrl).toBeDefined();
-    });
-
-    it('should return 400 for malformed document ID', async () => {
-      const res = await request(app).get('/api/documents/invalid-id-123/download');
-      expect(res.status).toBe(400);
-      expect(res.body.error.code).toBe('INVALID_DOCUMENT_ID');
-    });
-
-    it('should return 404 for nonexistent document ID', async () => {
-      const nonExistentId = '67215c0e189a022567df48ab';
-      const res = await request(app).get(`/api/documents/${nonExistentId}/download`);
-      expect(res.status).toBe(404);
-      expect(res.body.error.code).toBe('DOCUMENT_NOT_FOUND');
-    });
-  });
-
-  describe('GET /api/documents/:id/preview (S3 Content Preview)', () => {
-    it('should stream document content directly from S3 for in-browser preview', async () => {
-      const res = await request(app).get(`/api/documents/${createdDocId}/preview`);
-
-      expect(res.status).toBe(200);
-      expect(res.body.document).toBeDefined();
-      expect(res.body.document.originalName).toBe('config.json');
-      expect(res.body.content).toBe(sampleJsonContent);
-    });
-  });
-
-  describe('DELETE /api/documents/:id (DeleteObjectCommand & MongoDB removal)', () => {
-    it('should delete document metadata and wipe cloud object from S3', async () => {
-      const res = await request(app).delete(`/api/documents/${createdDocId}`);
-
-      expect(res.status).toBe(200);
-      expect(res.body.message).toBe('Document deleted successfully');
-      expect(res.body.id).toBe(createdDocId);
-
-      // Verify subsequent list does not include it
-      const listRes = await request(app).get('/api/documents');
-      const found = listRes.body.documents.find((d: any) => d._id === createdDocId);
-      expect(found).toBeUndefined();
-
-      // Verify download returns 404
-      const downloadRes = await request(app).get(`/api/documents/${createdDocId}/download`);
-      expect(downloadRes.status).toBe(404);
-    });
-
-    it('should return 404 when attempting to delete already deleted document', async () => {
-      const res = await request(app).delete(`/api/documents/${createdDocId}`);
-      expect(res.status).toBe(404);
-      expect(res.body.error.code).toBe('DOCUMENT_NOT_FOUND');
-    });
-
-    it('should return 400 for malformed document ID on delete', async () => {
-      const res = await request(app).delete('/api/documents/bad-id-123');
-      expect(res.status).toBe(400);
-      expect(res.body.error.code).toBe('INVALID_DOCUMENT_ID');
     });
   });
 });

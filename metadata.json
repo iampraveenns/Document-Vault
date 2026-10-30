@@ -1,6 +1,6 @@
 {
   "name": "Document Vault",
-  "description": "Production-grade MERN Document Management System with secure Multer upload validation, local disk storage, and Mongoose metadata persistence.",
+  "description": "Secure personal document workspace for storing, previewing, and managing text, markdown, and JSON files.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

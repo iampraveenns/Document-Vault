@@ -150,7 +150,7 @@ export const UploadArea: React.FC<UploadAreaProps> = ({ onUpload, isUploading })
             Click to browse or drag & drop a file here
           </p>
           <p className="text-xs text-slate-500 mt-1">
-            Authoritative UTF-8 validation and JSON syntax checks performed on server
+            Instant preview and secure storage for text, markdown, and JSON files
           </p>
         </div>
       ) : (
@@ -195,7 +195,7 @@ export const UploadArea: React.FC<UploadAreaProps> = ({ onUpload, isUploading })
               {isUploading ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Validating & Storing...</span>
+                  <span>Uploading File...</span>
                 </>
               ) : (
                 <>

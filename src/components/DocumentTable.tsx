@@ -52,7 +52,7 @@ export const DocumentTable: React.FC<DocumentTableProps> = ({
       {/* Table Header Controls */}
       <div className="p-4 border-b border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/40">
         <div className="flex items-center gap-2">
-          <h2 className="text-sm font-bold text-slate-900 tracking-tight">Documents Repository</h2>
+          <h2 className="text-sm font-bold text-slate-900 tracking-tight">Your Documents</h2>
           <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 font-semibold text-slate-600 border border-slate-200">
             {documents.length}
           </span>
@@ -110,7 +110,7 @@ export const DocumentTable: React.FC<DocumentTableProps> = ({
       ) : isLoading && documents.length === 0 ? (
         <div className="p-16 text-center">
           <Loader2 className="w-8 h-8 mx-auto text-indigo-600 animate-spin mb-3" />
-          <p className="text-xs font-medium text-slate-600">Retrieving documents from repository...</p>
+          <p className="text-xs font-medium text-slate-600">Loading your documents...</p>
         </div>
       ) : filteredDocuments.length === 0 ? (
         <EmptyState

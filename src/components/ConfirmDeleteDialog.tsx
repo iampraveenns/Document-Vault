@@ -39,7 +39,7 @@ export const ConfirmDeleteDialog: React.FC<ConfirmDeleteDialogProps> = ({
               Are you sure you want to delete <span className="font-semibold text-slate-900 font-mono">"{document.originalName}"</span>?
             </p>
             <p className="text-xs text-rose-600 mt-2 bg-rose-50 p-2 rounded-md border border-rose-100">
-              This will permanently delete the object from cloud storage (S3/R2) and remove its metadata record from MongoDB. This action cannot be undone.
+              This document will be permanently removed from your vault. This action cannot be undone.
             </p>
           </div>
         </div>
