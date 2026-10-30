@@ -121,7 +121,7 @@ export const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({
 
         {/* Footer */}
         <div className="p-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500">
-          <span>Read-only preview generated from verified UTF-8 disk storage</span>
+          <span>Read-only preview streamed from verified Cloud Object Storage (S3/R2)</span>
           <button
             onClick={onClose}
             className="px-3 py-1 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 rounded-md font-medium text-xs transition-colors"

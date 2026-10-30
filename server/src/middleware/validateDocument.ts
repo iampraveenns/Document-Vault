@@ -1,13 +1,12 @@
 import { Request, Response, NextFunction } from 'express';
-import fs from 'fs';
 import path from 'path';
 import { AppError } from '../utils/AppError.ts';
-import { cleanupTempFile, MAX_FILE_SIZE_BYTES, MAX_FILE_SIZE_MB } from '../utils/storage.ts';
+import { MAX_FILE_SIZE_BYTES, MAX_FILE_SIZE_MB } from '../utils/storage.ts';
 import { AllowedExtension, AllowedMimeType } from '../models/Document.ts';
 
 export interface ValidatedFileInfo {
   originalName: string;
-  tempPath: string;
+  buffer: Buffer;
   extension: AllowedExtension;
   mimeType: AllowedMimeType;
   size: number;
@@ -59,15 +58,12 @@ export async function validateDocument(
     return next(new AppError(400, 'MISSING_FILE', 'No file uploaded. Please provide a file in the "file" field.'));
   }
 
-  const tempPath = file.path;
-
   try {
     // 1. Extension normalization & allowlist check
     const rawExt = path.extname(file.originalname).toLowerCase();
     const config = ALLOWED_EXTENSIONS[rawExt];
 
     if (!config) {
-      await cleanupTempFile(tempPath);
       return next(
         new AppError(
           415,
@@ -79,7 +75,6 @@ export async function validateDocument(
 
     // 2. Size limit check
     if (file.size > MAX_FILE_SIZE_BYTES) {
-      await cleanupTempFile(tempPath);
       return next(
         new AppError(
           413,
@@ -90,17 +85,14 @@ export async function validateDocument(
     }
 
     // 3. Empty file check (raw file size)
-    if (file.size === 0) {
-      await cleanupTempFile(tempPath);
+    if (file.size === 0 || !file.buffer || file.buffer.length === 0) {
       return next(new AppError(400, 'EMPTY_FILE', 'The uploaded file is empty (0 bytes).'));
     }
 
-    // 4. Read file content from temporary path
-    const fileBuffer = await fs.promises.readFile(tempPath);
+    const fileBuffer = file.buffer;
 
-    // 5. Enforce UTF-8 policy & non-binary content
+    // 4. Enforce UTF-8 policy & non-binary content
     if (!isValidUTF8(fileBuffer)) {
-      await cleanupTempFile(tempPath);
       return next(
         new AppError(
           400,
@@ -112,20 +104,18 @@ export async function validateDocument(
 
     const textContent = fileBuffer.toString('utf-8');
 
-    // 6. Check empty content after trimming whitespace
+    // 5. Check empty content after trimming whitespace
     if (textContent.trim().length === 0) {
-      await cleanupTempFile(tempPath);
       return next(
         new AppError(400, 'EMPTY_FILE', 'The uploaded file contains only whitespace or is empty.')
       );
     }
 
-    // 7. Strict JSON syntax check for .json files
+    // 6. Strict JSON syntax check for .json files
     if (config.ext === '.json') {
       try {
         JSON.parse(textContent);
       } catch (jsonErr: any) {
-        await cleanupTempFile(tempPath);
         return next(
           new AppError(
             400,
@@ -136,10 +126,10 @@ export async function validateDocument(
       }
     }
 
-    // Attach validated details
+    // Attach validated details including buffer
     req.validatedFile = {
       originalName: file.originalname,
-      tempPath,
+      buffer: fileBuffer,
       extension: config.ext,
       mimeType: config.mime,
       size: file.size,
@@ -147,7 +137,6 @@ export async function validateDocument(
 
     next();
   } catch (error) {
-    await cleanupTempFile(tempPath);
     next(error);
   }
 }

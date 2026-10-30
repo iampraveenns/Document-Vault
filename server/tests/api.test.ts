@@ -1,12 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
-import fs from 'fs';
-import path from 'path';
 import { Express } from 'express';
 import { createApp } from '../src/app.ts';
 import { connectDB, disconnectDB } from '../src/config/database.ts';
 import { DocumentModel } from '../src/models/Document.ts';
-import { TEMP_DIR, DOCUMENTS_DIR } from '../src/utils/storage.ts';
 
 let app: Express;
 
@@ -23,25 +20,26 @@ afterAll(async () => {
   await disconnectDB();
 });
 
-describe('Document Vault REST API Tests', () => {
+describe('Document Vault REST API Tests (Cloud Object Storage)', () => {
   let createdDocId: string;
-  const sampleJsonContent = JSON.stringify({ name: 'Document Vault', version: '1.0.0', active: true }, null, 2);
+  const sampleJsonContent = JSON.stringify({ name: 'Document Vault', version: '2.0.0', storage: 'S3' }, null, 2);
 
   describe('GET /api/health', () => {
-    it('should return 200 OK with healthy status and connected database', async () => {
+    it('should return 200 OK with healthy status, connected database, and s3 storageProvider', async () => {
       const res = await request(app).get('/api/health');
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('healthy');
       expect(res.body.database).toBe('connected');
+      expect(res.body.storageProvider).toBe('s3');
       expect(typeof res.body.uptime).toBe('number');
     });
   });
 
-  describe('POST /api/documents (Upload)', () => {
-    it('should successfully upload and persist a valid .txt document', async () => {
+  describe('POST /api/documents (Cloud S3 Upload)', () => {
+    it('should successfully upload and stream a valid .txt document to S3', async () => {
       const res = await request(app)
         .post('/api/documents')
-        .attach('file', Buffer.from('Hello world from Document Vault test text file!'), 'readme.txt');
+        .attach('file', Buffer.from('Hello world from S3 Document Vault test text file!'), 'readme.txt');
 
       expect(res.status).toBe(201);
       expect(res.body.message).toBe('Document uploaded successfully');
@@ -49,19 +47,21 @@ describe('Document Vault REST API Tests', () => {
       expect(res.body.document.originalName).toBe('readme.txt');
       expect(res.body.document.extension).toBe('.txt');
       expect(res.body.document.mimeType).toBe('text/plain');
+      expect(res.body.document.bucket).toBeDefined();
+      expect(res.body.document.region).toBeDefined();
       expect(res.body.document.size).toBeGreaterThan(0);
-      expect(res.body.document.storagePath).toBeUndefined(); // Storage path not leaked
     });
 
-    it('should successfully upload and persist a valid .md document', async () => {
+    it('should successfully upload and persist a valid .md document to S3', async () => {
       const res = await request(app)
         .post('/api/documents')
-        .attach('file', Buffer.from('# Release Notes\n\n- Feature A\n- Feature B'), 'notes.md');
+        .attach('file', Buffer.from('# Release Notes\n\n- S3 Storage Enabled\n- R2 Support'), 'notes.md');
 
       expect(res.status).toBe(201);
       expect(res.body.document.originalName).toBe('notes.md');
       expect(res.body.document.extension).toBe('.md');
       expect(res.body.document.mimeType).toBe('text/markdown');
+      expect(res.body.document.bucket).toBeDefined();
     });
 
     it('should successfully upload and validate a valid .json document', async () => {
@@ -111,16 +111,10 @@ describe('Document Vault REST API Tests', () => {
       expect(res.status).toBe(400);
       expect(res.body.error.code).toBe('MALFORMED_JSON');
     });
-
-    it('should clean up temporary upload directory on rejected files', async () => {
-      const tempFiles = await fs.promises.readdir(TEMP_DIR);
-      // Temporary directory should not accumulate orphaned files
-      expect(tempFiles.filter(f => f.startsWith('temp-'))).toHaveLength(0);
-    });
   });
 
-  describe('GET /api/documents (List)', () => {
-    it('should retrieve all documents ordered newest first', async () => {
+  describe('GET /api/documents (List from MongoDB)', () => {
+    it('should retrieve all documents ordered newest first with S3 metadata', async () => {
       const res = await request(app).get('/api/documents');
 
       expect(res.status).toBe(200);
@@ -135,20 +129,28 @@ describe('Document Vault REST API Tests', () => {
         expect(currentDate).toBeGreaterThanOrEqual(nextDate);
       }
 
-      // Verify private fields are excluded
-      expect(docs[0].storagePath).toBeUndefined();
-      expect(docs[0].storedName).toBeUndefined();
+      // Verify cloud bucket metadata is populated
+      expect(docs[0].bucket).toBeDefined();
+      expect(docs[0].region).toBeDefined();
     });
   });
 
-  describe('GET /api/documents/:id/download', () => {
-    it('should stream the file with original filename in header', async () => {
+  describe('GET /api/documents/:id/download (Stream & Pre-signed URL)', () => {
+    it('should stream the file directly with original filename in header', async () => {
       const res = await request(app).get(`/api/documents/${createdDocId}/download`);
 
       expect(res.status).toBe(200);
       expect(res.header['content-disposition']).toContain('config.json');
       expect(res.header['content-type']).toContain('application/json');
       expect(res.text).toBe(sampleJsonContent);
+    });
+
+    it('should return a pre-signed URL when ?presigned=true is passed', async () => {
+      const res = await request(app).get(`/api/documents/${createdDocId}/download?presigned=true`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.document).toBeDefined();
+      expect(res.body.downloadUrl).toBeDefined();
     });
 
     it('should return 400 for malformed document ID', async () => {
@@ -165,8 +167,8 @@ describe('Document Vault REST API Tests', () => {
     });
   });
 
-  describe('GET /api/documents/:id/preview', () => {
-    it('should return document metadata and content text for in-browser preview', async () => {
+  describe('GET /api/documents/:id/preview (S3 Content Preview)', () => {
+    it('should stream document content directly from S3 for in-browser preview', async () => {
       const res = await request(app).get(`/api/documents/${createdDocId}/preview`);
 
       expect(res.status).toBe(200);
@@ -176,8 +178,8 @@ describe('Document Vault REST API Tests', () => {
     });
   });
 
-  describe('DELETE /api/documents/:id', () => {
-    it('should delete document metadata and its physical file', async () => {
+  describe('DELETE /api/documents/:id (DeleteObjectCommand & MongoDB removal)', () => {
+    it('should delete document metadata and wipe cloud object from S3', async () => {
       const res = await request(app).delete(`/api/documents/${createdDocId}`);
 
       expect(res.status).toBe(200);

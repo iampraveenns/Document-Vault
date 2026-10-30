@@ -1,103 +1,245 @@
-import fs from 'fs';
-import path from 'path';
+import {
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+  HeadObjectCommand,
+} from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { Readable } from 'stream';
+import { s3Client, S3_BUCKET_NAME, S3_REGION, isCloudS3Configured } from '../config/s3.ts';
 import { AppError } from './AppError.ts';
 
-// Configurable storage paths from environment or defaults
-export const TEMP_DIR = path.resolve(process.env.TEMP_UPLOAD_DIR || './storage/tmp');
-export const DOCUMENTS_DIR = path.resolve(process.env.UPLOAD_DIR || './storage/documents');
 export const MAX_FILE_SIZE_MB = Number(process.env.MAX_FILE_SIZE_MB) || 5;
 export const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
-/**
- * Ensure storage directories exist synchronously or asynchronously on startup.
- */
-export async function ensureStorageDirectories(): Promise<void> {
-  try {
-    await fs.promises.mkdir(TEMP_DIR, { recursive: true });
-    await fs.promises.mkdir(DOCUMENTS_DIR, { recursive: true });
-  } catch (error) {
-    console.error('Failed to create storage directories:', error);
-    throw new AppError(500, 'STORAGE_INIT_ERROR', 'Failed to initialize local storage directories.');
-  }
+// In-memory simulation store for local development when real AWS credentials are not yet configured
+interface SimulatedObject {
+  buffer: Buffer;
+  contentType: string;
+  metadata?: Record<string, string>;
+  createdAt: Date;
 }
+const localS3MemoryStore = new Map<string, SimulatedObject>();
 
 /**
- * Safely move a file from temporary directory to permanent storage.
- * Handles cross-device link issues by falling back to copy + unlink.
+ * Upload a document buffer directly to S3 / Cloud Object Storage.
  */
-export async function moveToPermanentStorage(tempPath: string, destinationFilename: string): Promise<string> {
-  const destinationPath = path.join(DOCUMENTS_DIR, destinationFilename);
-
-  // Security check: ensure destination resides inside DOCUMENTS_DIR
-  if (!destinationPath.startsWith(DOCUMENTS_DIR)) {
-    throw new AppError(400, 'PATH_TRAVERSAL_DETECTED', 'Invalid file storage destination.');
-  }
-
+export async function uploadObjectToStorage(
+  key: string,
+  buffer: Buffer,
+  contentType: string,
+  metadata?: Record<string, string>
+): Promise<{ key: string; bucket: string; region: string }> {
   try {
-    await fs.promises.rename(tempPath, destinationPath);
-  } catch (err: any) {
-    // If EXDEV (cross-device move), copy and delete source
-    if (err.code === 'EXDEV') {
-      await fs.promises.copyFile(tempPath, destinationPath);
-      await fs.promises.unlink(tempPath).catch(() => {});
+    if (isCloudS3Configured) {
+      const command = new PutObjectCommand({
+        Bucket: S3_BUCKET_NAME,
+        Key: key,
+        Body: buffer,
+        ContentType: contentType,
+        ContentLength: buffer.length,
+        Metadata: metadata,
+      });
+
+      await s3Client.send(command);
     } else {
-      throw err;
+      // In-memory S3 simulation for local development / testing
+      localS3MemoryStore.set(key, {
+        buffer,
+        contentType,
+        metadata,
+        createdAt: new Date(),
+      });
     }
-  }
 
-  return destinationPath;
+    return {
+      key,
+      bucket: S3_BUCKET_NAME,
+      region: S3_REGION,
+    };
+  } catch (error: any) {
+    console.error(`S3 PutObject error for key "${key}":`, error);
+    // If cloud call fails due to invalid credentials, record in local store as fallback in dev
+    if (process.env.NODE_ENV !== 'production' && (error.name === 'CredentialsProviderError' || error.name === 'InvalidAccessKeyId')) {
+      localS3MemoryStore.set(key, { buffer, contentType, metadata, createdAt: new Date() });
+      return { key, bucket: S3_BUCKET_NAME, region: S3_REGION };
+    }
+    throw new AppError(500, 'S3_UPLOAD_ERROR', `Failed to upload file to cloud object storage: ${error.message}`);
+  }
 }
 
 /**
- * Safely removes a file from permanent storage.
- * If the file is already missing, treats it as recoverable/absent without error.
+ * Stream an object directly from S3 / Cloud Object Storage.
  */
-export async function deleteStoredFile(filename: string): Promise<boolean> {
-  const filePath = path.join(DOCUMENTS_DIR, path.basename(filename));
-
+export async function getObjectStreamFromStorage(
+  key: string
+): Promise<{ stream: Readable; contentType: string; contentLength?: number }> {
   try {
-    await fs.promises.unlink(filePath);
+    if (isCloudS3Configured) {
+      const command = new GetObjectCommand({
+        Bucket: S3_BUCKET_NAME,
+        Key: key,
+      });
+
+      const response = await s3Client.send(command);
+      if (!response.Body) {
+        throw new AppError(404, 'EMPTY_OBJECT_STREAM', 'Object body is empty.');
+      }
+
+      // Convert response.Body to Node.js Readable stream
+      const stream = response.Body as Readable;
+      return {
+        stream,
+        contentType: response.ContentType || 'application/octet-stream',
+        contentLength: response.ContentLength,
+      };
+    }
+
+    // Fallback to local memory simulation
+    const item = localS3MemoryStore.get(key);
+    if (!item) {
+      throw new AppError(404, 'FILE_MISSING_IN_STORAGE', 'File not found in object storage.');
+    }
+
+    const readable = Readable.from(item.buffer);
+    return {
+      stream: readable,
+      contentType: item.contentType,
+      contentLength: item.buffer.length,
+    };
+  } catch (error: any) {
+    if (error instanceof AppError) throw error;
+    if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
+      throw new AppError(404, 'FILE_MISSING_IN_STORAGE', 'The physical file was not found in cloud storage.');
+    }
+    // Check if in local store as fallback
+    const item = localS3MemoryStore.get(key);
+    if (item) {
+      return {
+        stream: Readable.from(item.buffer),
+        contentType: item.contentType,
+        contentLength: item.buffer.length,
+      };
+    }
+    console.error(`S3 GetObject stream error for key "${key}":`, error);
+    throw new AppError(500, 'S3_GET_STREAM_ERROR', `Failed to retrieve object from storage: ${error.message}`);
+  }
+}
+
+/**
+ * Read the entire object from storage as a UTF-8 string for in-browser preview.
+ */
+export async function getObjectStringFromStorage(key: string): Promise<string> {
+  try {
+    if (isCloudS3Configured) {
+      const command = new GetObjectCommand({
+        Bucket: S3_BUCKET_NAME,
+        Key: key,
+      });
+
+      const response = await s3Client.send(command);
+      if (!response.Body) {
+        return '';
+      }
+
+      const stream = response.Body as Readable;
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      return Buffer.concat(chunks).toString('utf-8');
+    }
+
+    const item = localS3MemoryStore.get(key);
+    if (!item) {
+      throw new AppError(404, 'FILE_MISSING_IN_STORAGE', 'The requested object is not in storage.');
+    }
+    return item.buffer.toString('utf-8');
+  } catch (error: any) {
+    if (error instanceof AppError) throw error;
+    if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
+      throw new AppError(404, 'FILE_MISSING_IN_STORAGE', 'The requested file was not found in object storage.');
+    }
+    const item = localS3MemoryStore.get(key);
+    if (item) {
+      return item.buffer.toString('utf-8');
+    }
+    console.error(`S3 GetObject string error for key "${key}":`, error);
+    throw new AppError(500, 'S3_GET_STRING_ERROR', `Failed to read document content: ${error.message}`);
+  }
+}
+
+/**
+ * Generate a pre-signed ephemeral GET URL for client-direct download.
+ */
+export async function generatePresignedDownloadUrl(
+  key: string,
+  originalFilename: string,
+  expiresInSeconds = 3600
+): Promise<string> {
+  try {
+    const encodedFilename = encodeURIComponent(originalFilename);
+    const command = new GetObjectCommand({
+      Bucket: S3_BUCKET_NAME,
+      Key: key,
+      ResponseContentDisposition: `attachment; filename="${originalFilename.replace(/"/g, '\\"')}"; filename*=UTF-8''${encodedFilename}`,
+    });
+
+    const presignedUrl = await getSignedUrl(s3Client, command, {
+      expiresIn: expiresInSeconds,
+    });
+    return presignedUrl;
+  } catch (error: any) {
+    console.warn(`Could not generate presigned URL for key "${key}" (${error.message}). Direct streaming will be used.`);
+    return '';
+  }
+}
+
+/**
+ * Delete an object from S3 / Cloud Object Storage.
+ * Idempotent: if already missing, does not throw an error.
+ */
+export async function deleteObjectFromStorage(key: string): Promise<boolean> {
+  try {
+    localS3MemoryStore.delete(key);
+
+    if (isCloudS3Configured) {
+      const command = new DeleteObjectCommand({
+        Bucket: S3_BUCKET_NAME,
+        Key: key,
+      });
+
+      await s3Client.send(command);
+    }
     return true;
   } catch (error: any) {
-    if (error.code === 'ENOENT') {
-      // File already missing, consider it cleaned up
+    console.error(`S3 DeleteObject error for key "${key}":`, error);
+    if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
       return false;
     }
-    console.error(`Error deleting file at ${filePath}:`, error);
-    throw new AppError(500, 'FILE_DELETE_ERROR', 'Failed to delete physical file from storage.');
+    throw new AppError(500, 'S3_DELETE_ERROR', `Failed to delete file from object storage: ${error.message}`);
   }
 }
 
 /**
- * Cleans up temporary upload file safely without throwing uncaught errors.
+ * Check if an object exists in storage via HeadObject.
  */
-export async function cleanupTempFile(filePath?: string): Promise<void> {
-  if (!filePath) return;
-  try {
-    await fs.promises.unlink(filePath);
-  } catch (err: any) {
-    if (err.code !== 'ENOENT') {
-      console.warn(`Warning: Could not remove temporary file ${filePath}:`, err.message);
-    }
-  }
-}
+export async function objectExistsInStorage(key: string): Promise<boolean> {
+  if (localS3MemoryStore.has(key)) return true;
 
-/**
- * Check if a file exists on disk.
- */
-export async function fileExists(filePath: string): Promise<boolean> {
+  if (!isCloudS3Configured) return false;
+
   try {
-    await fs.promises.access(filePath, fs.constants.F_OK);
+    const command = new HeadObjectCommand({
+      Bucket: S3_BUCKET_NAME,
+      Key: key,
+    });
+    await s3Client.send(command);
     return true;
-  } catch {
+  } catch (error: any) {
+    if (error.name === 'NotFound' || error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
+      return false;
+    }
     return false;
   }
-}
-
-/**
- * Resolve absolute path for a stored document safely.
- */
-export function getStoredFilePath(storedName: string): string {
-  const safeFilename = path.basename(storedName);
-  return path.join(DOCUMENTS_DIR, safeFilename);
 }

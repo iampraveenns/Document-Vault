@@ -7,12 +7,8 @@ import documentRoutes from './routes/documentRoutes.ts';
 import { documentController } from './controllers/documentController.ts';
 import { errorHandler } from './middleware/errorHandler.ts';
 import { notFoundHandler } from './middleware/notFound.ts';
-import { ensureStorageDirectories } from './utils/storage.ts';
 
 export async function createApp(): Promise<Express> {
-  // Ensure storage directories exist before handling requests
-  await ensureStorageDirectories();
-
   const app = express();
 
   // Basic CORS configuration

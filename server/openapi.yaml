@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Document Vault API
-  description: Production-grade REST API for uploading, listing, streaming, and managing text, markdown, and JSON documents with MongoDB metadata persistence and local filesystem storage.
+  description: Production-grade REST API for uploading, listing, streaming, and managing text, markdown, and JSON documents with MongoDB Atlas metadata persistence and AWS S3 / Cloudflare R2 cloud object storage.
   version: 1.0.0
   contact:
     name: Document Vault Engineering Team
@@ -13,7 +13,7 @@ paths:
   /health:
     get:
       summary: Health check endpoint
-      description: Returns service status, uptime, and database connectivity.
+      description: Returns service status, uptime, database connectivity, and cloud storage provider status.
       tags:
         - System
       responses:
@@ -32,8 +32,8 @@ paths:
 
   /documents:
     post:
-      summary: Upload a new document
-      description: Uploads a single document file (.txt, .md, or .json) up to 5MB. Validates text encoding and JSON syntax before persisting metadata to MongoDB and moving the file to disk storage.
+      summary: Upload a new document to Cloud Object Storage
+      description: Uploads a single document file (.txt, .md, or .json) up to 5MB. Validates in-memory text encoding and JSON syntax before persisting metadata to MongoDB Atlas and streaming the file directly to an AWS S3 / Cloudflare R2 bucket using unique UUID-based keys.
       tags:
         - Documents
       requestBody:
@@ -51,7 +51,7 @@ paths:
                   description: The document file to upload (.txt, .md, or .json). Max size 5MB.
       responses:
         '201':
-          description: Document uploaded and persisted successfully.
+          description: Document uploaded and persisted to cloud storage successfully.
           content:
             application/json:
               schema:
@@ -75,7 +75,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
-          description: Internal storage or database failure with safe rollback.
+          description: Cloud storage or database failure with safe rollback.
           content:
             application/json:
               schema:
@@ -83,7 +83,7 @@ paths:
 
     get:
       summary: List all documents
-      description: Retrieves metadata for all ready documents, sorted in descending order (newest first).
+      description: Retrieves metadata for all ready documents from MongoDB, sorted in descending order (newest first).
       tags:
         - Documents
       responses:
@@ -102,8 +102,8 @@ paths:
 
   /documents/{id}/download:
     get:
-      summary: Download document file
-      description: Streams the original document file from local storage using its original filename in the Content-Disposition header.
+      summary: Download document file or get pre-signed URL
+      description: Streams the document file directly from Cloud Object Storage with original filename in the Content-Disposition header. If ?presigned=true query parameter is supplied, returns an ephemeral pre-signed download URL.
       tags:
         - Documents
       parameters:
@@ -114,9 +114,16 @@ paths:
           schema:
             type: string
             example: "67215c0e189a022567df48ab"
+        - name: presigned
+          in: query
+          required: false
+          description: If true, returns an ephemeral pre-signed S3 download URL as JSON instead of streaming.
+          schema:
+            type: boolean
+            example: false
       responses:
         '200':
-          description: File stream returned as binary attachment.
+          description: File stream returned as binary attachment or JSON containing presigned URL.
           headers:
             Content-Disposition:
               schema:
@@ -126,6 +133,10 @@ paths:
               schema:
                 type: string
                 example: application/json
+            X-Presigned-Url:
+              schema:
+                type: string
+                description: Ephemeral pre-signed S3 download URL.
           content:
             text/plain:
               schema:
@@ -137,8 +148,14 @@ paths:
                 format: binary
             application/json:
               schema:
-                type: string
-                format: binary
+                oneOf:
+                  - type: string
+                    format: binary
+                  - type: object
+                    properties:
+                      downloadUrl:
+                        type: string
+                        example: "https://bucket.s3.amazonaws.com/documents/uuid.json?X-Amz-Signature=..."
         '400':
           description: Malformed MongoDB identifier format.
           content:
@@ -146,7 +163,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: Document metadata not found or physical file missing on disk.
+          description: Document metadata not found or physical file missing in cloud storage.
           content:
             application/json:
               schema:
@@ -154,8 +171,8 @@ paths:
 
   /documents/{id}/preview:
     get:
-      summary: Preview document content
-      description: Retrieves UTF-8 text contents for in-browser modal inspection.
+      summary: Preview document content from S3
+      description: Streams UTF-8 text contents directly from Cloud Object Storage for in-browser modal inspection.
       tags:
         - Documents
       parameters:
@@ -185,7 +202,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: Document not found.
+          description: Document not found in database or cloud storage.
           content:
             application/json:
               schema:
@@ -193,8 +210,8 @@ paths:
 
   /documents/{id}:
     delete:
-      summary: Delete a document
-      description: Executes a two-phase deletion. Marks document as deleting, removes the physical file from disk storage, and cleans up the MongoDB metadata.
+      summary: Delete a document from S3 and MongoDB
+      description: Executes a two-phase deletion. Marks document as deleting in MongoDB, executes DeleteObjectCommand on the S3 bucket to wipe the object, and cleans up the MongoDB metadata record.
       tags:
         - Documents
       parameters:
@@ -206,7 +223,7 @@ paths:
             type: string
       responses:
         '200':
-          description: Document deleted successfully.
+          description: Document and cloud object deleted successfully.
           content:
             application/json:
               schema:
@@ -257,6 +274,12 @@ components:
           type: integer
           description: File size in bytes.
           example: 4096
+        bucket:
+          type: string
+          example: "document-vault-bucket"
+        region:
+          type: string
+          example: "us-east-1"
         status:
           type: string
           enum: ["ready", "deleting"]
@@ -300,6 +323,9 @@ components:
         database:
           type: string
           example: "connected"
+        storageProvider:
+          type: string
+          example: "s3"
         uptime:
           type: number
           example: 124.5

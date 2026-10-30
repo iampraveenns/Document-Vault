@@ -37,10 +37,10 @@ export const SummaryStats: React.FC<SummaryStatsProps> = ({ documents }) => {
           <HardDrive className="w-5 h-5" />
         </div>
         <div>
-          <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Disk Storage</p>
+          <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Cloud Storage</p>
           <div className="flex items-baseline gap-2 mt-0.5">
             <span className="text-xl font-bold text-slate-900">{formatBytes(totalSize)}</span>
-            <span className="text-xs text-slate-400">on disk</span>
+            <span className="text-xs text-slate-400">in S3 bucket</span>
           </div>
         </div>
       </div>

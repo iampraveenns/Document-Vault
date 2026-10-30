@@ -86,7 +86,7 @@ export const DocumentsPage: React.FC = () => {
               OpenAPI 3.0 Specification
             </a>
             <span className="text-slate-300">|</span>
-            <span>UTF-8 & JSON Verified Storage</span>
+            <span>AWS S3 / Cloudflare R2 Cloud Storage</span>
           </div>
         </div>
       </footer>

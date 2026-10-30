@@ -7,11 +7,5 @@ coverage/
 .env*
 !.env.example
 
-# File uploads and temporary storage
-storage/tmp/*
-!storage/tmp/.gitkeep
-storage/documents/*
-!storage/documents/.gitkeep
-
 # Test artifacts
 tests/storage/

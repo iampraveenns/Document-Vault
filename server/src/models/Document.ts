@@ -6,11 +6,12 @@ export type DocumentStatus = 'ready' | 'deleting';
 
 export interface IDocument extends MongooseDocument {
   originalName: string;
-  storedName: string;
+  s3Key: string;
+  bucket: string;
+  region: string;
   extension: AllowedExtension;
   mimeType: AllowedMimeType;
   size: number;
-  storagePath: string;
   status: DocumentStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -22,6 +23,8 @@ export interface PublicDocument {
   extension: AllowedExtension;
   mimeType: AllowedMimeType;
   size: number;
+  bucket?: string;
+  region?: string;
   status: DocumentStatus;
   createdAt: string;
   updatedAt: string;
@@ -34,11 +37,19 @@ const DocumentSchema = new Schema<IDocument>(
       required: [true, 'Original filename is required'],
       trim: true,
     },
-    storedName: {
+    s3Key: {
       type: String,
-      required: [true, 'Storage filename is required'],
+      required: [true, 'Cloud S3 object key is required'],
       unique: true,
       index: true,
+    },
+    bucket: {
+      type: String,
+      required: [true, 'S3 bucket name is required'],
+    },
+    region: {
+      type: String,
+      required: [true, 'S3 region is required'],
     },
     extension: {
       type: String,
@@ -58,11 +69,6 @@ const DocumentSchema = new Schema<IDocument>(
       required: [true, 'File size is required'],
       min: [1, 'File cannot be empty'],
     },
-    storagePath: {
-      type: String,
-      required: [true, 'Storage path is required'],
-      select: false, // Exclude by default from queries to prevent leakage
-    },
     status: {
       type: String,
       enum: ['ready', 'deleting'],
@@ -74,8 +80,6 @@ const DocumentSchema = new Schema<IDocument>(
     timestamps: true,
     toJSON: {
       transform(_doc, ret: Record<string, any>) {
-        delete ret.storagePath;
-        delete ret.storedName;
         delete ret.__v;
         return ret;
       },
@@ -93,6 +97,8 @@ export function formatPublicDocument(doc: IDocument): PublicDocument {
     extension: doc.extension,
     mimeType: doc.mimeType,
     size: doc.size,
+    bucket: doc.bucket,
+    region: doc.region,
     status: doc.status,
     createdAt: doc.createdAt ? doc.createdAt.toISOString() : new Date().toISOString(),
     updatedAt: doc.updatedAt ? doc.updatedAt.toISOString() : new Date().toISOString(),

@@ -1,5 +1,4 @@
 import { Request, Response, NextFunction } from 'express';
-import fs from 'fs';
 import { documentService } from '../services/documentService.ts';
 import { isDatabaseConnected } from '../config/database.ts';
 import { AppError } from '../utils/AppError.ts';
@@ -7,7 +6,7 @@ import { AppError } from '../utils/AppError.ts';
 export class DocumentController {
   /**
    * POST /api/documents
-   * Upload and process a new document
+   * Upload and process a new document directly into Cloud Object Storage
    */
   async upload(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -41,32 +40,52 @@ export class DocumentController {
 
   /**
    * GET /api/documents/:id/download
-   * Stream document file download with original filename
+   * Stream document file download directly from Cloud Object Storage or return presigned URL
    */
   async download(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { id } = req.params;
-      const { document, filePath } = await documentService.getDocumentForDownload(id);
+      const wantsPresigned = req.query.presigned === 'true';
 
-      // Encode filename for RFC 5987 compliance (supports non-ASCII characters safely)
+      const { document, stream, contentType, contentLength, presignedUrl } =
+        await documentService.getDocumentForDownload(id);
+
+      // If client explicitly requests the pre-signed URL (e.g. for direct client-to-S3 download)
+      if (wantsPresigned && presignedUrl) {
+        res.status(200).json({
+          downloadUrl: presignedUrl,
+          document: {
+            _id: document._id.toString(),
+            originalName: document.originalName,
+          },
+        });
+        return;
+      }
+
+      // Stream file directly from S3 to client with RFC 5987 Content-Disposition
       const encodedFilename = encodeURIComponent(document.originalName);
       res.setHeader(
         'Content-Disposition',
         `attachment; filename="${document.originalName.replace(/"/g, '\\"')}"; filename*=UTF-8''${encodedFilename}`
       );
-      res.setHeader('Content-Type', document.mimeType);
-      res.setHeader('Content-Length', document.size);
+      res.setHeader('Content-Type', contentType || document.mimeType);
+      if (contentLength) {
+        res.setHeader('Content-Length', contentLength);
+      }
 
-      const readStream = fs.createReadStream(filePath);
+      // Also expose pre-signed URL in a header if available
+      if (presignedUrl) {
+        res.setHeader('X-Presigned-Url', presignedUrl);
+      }
 
-      readStream.on('error', (streamErr) => {
-        console.error('Error streaming document download:', streamErr);
+      stream.on('error', (streamErr) => {
+        console.error('Error streaming cloud object download:', streamErr);
         if (!res.headersSent) {
-          next(new AppError(500, 'STREAM_ERROR', 'Failed while streaming file content.'));
+          next(new AppError(500, 'STREAM_ERROR', 'Failed while streaming file content from cloud storage.'));
         }
       });
 
-      readStream.pipe(res);
+      stream.pipe(res);
     } catch (error) {
       next(error);
     }
@@ -74,7 +93,7 @@ export class DocumentController {
 
   /**
    * GET /api/documents/:id/preview
-   * Retrieve document text content for in-browser inspection
+   * Retrieve document text content directly from S3 for in-browser inspection
    */
   async preview(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -88,7 +107,7 @@ export class DocumentController {
 
   /**
    * DELETE /api/documents/:id
-   * Remove a document and its stored physical file
+   * Remove a document record from MongoDB and delete the object from Cloud Storage
    */
   async remove(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -107,7 +126,7 @@ export class DocumentController {
 
   /**
    * GET /api/health
-   * Service and database health check
+   * Service, database, and cloud storage health check
    */
   async health(_req: Request, res: Response): Promise<void> {
     const dbConnected = isDatabaseConnected();
@@ -117,6 +136,7 @@ export class DocumentController {
       status: dbConnected ? 'healthy' : 'degraded',
       timestamp: new Date().toISOString(),
       database: dbConnected ? 'connected' : 'disconnected',
+      storageProvider: 's3',
       uptime: process.uptime(),
     });
   }

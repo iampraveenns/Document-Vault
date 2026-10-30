@@ -4,6 +4,8 @@ export interface PublicDocument {
   extension: '.txt' | '.md' | '.json';
   mimeType: string;
   size: number;
+  bucket?: string;
+  region?: string;
   status: 'ready' | 'deleting';
   createdAt: string;
   updatedAt: string;

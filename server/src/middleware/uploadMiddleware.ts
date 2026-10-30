@@ -1,19 +1,10 @@
 import multer from 'multer';
 import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
-import { TEMP_DIR, MAX_FILE_SIZE_BYTES } from '../utils/storage.ts';
+import { MAX_FILE_SIZE_BYTES } from '../utils/storage.ts';
 import { AppError } from '../utils/AppError.ts';
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    cb(null, TEMP_DIR);
-  },
-  filename: (_req, file, cb) => {
-    const rawExt = path.extname(file.originalname).toLowerCase();
-    const tempName = `temp-${Date.now()}-${uuidv4()}${rawExt}`;
-    cb(null, tempName);
-  },
-});
+// In-memory storage: no temporary files are written to the local filesystem
+const storage = multer.memoryStorage();
 
 const fileFilter: multer.Options['fileFilter'] = (_req, file, cb) => {
   const ext = path.extname(file.originalname).toLowerCase();

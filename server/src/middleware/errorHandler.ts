@@ -2,19 +2,14 @@ import { Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import mongoose from 'mongoose';
 import { AppError } from '../utils/AppError.ts';
-import { cleanupTempFile, MAX_FILE_SIZE_MB } from '../utils/storage.ts';
+import { MAX_FILE_SIZE_MB } from '../utils/storage.ts';
 
 export function errorHandler(
   err: any,
-  req: Request,
+  _req: Request,
   res: Response,
   _next: NextFunction
 ): void {
-  // Clean up any remaining temporary upload file on error
-  if (req.file?.path) {
-    cleanupTempFile(req.file.path).catch(() => {});
-  }
-
   // Handle custom AppError
   if (err instanceof AppError) {
     res.status(err.statusCode).json({
